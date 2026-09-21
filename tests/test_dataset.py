@@ -45,3 +45,19 @@ def test_settled_scenario_balls_move_toward_high_x_under_gravity():
     )
     settled_mean_x = sum(b["x"] for b in settled) / len(settled)
     assert settled_mean_x > start_mean_x
+
+
+import torch
+from model.dataset import BouncePairDataset
+
+
+def test_bounce_pair_dataset_shapes_and_determinism():
+    ds1 = BouncePairDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738)
+    ds2 = BouncePairDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738)
+    assert len(ds1) == 6
+    g_t, g_t1 = ds1[0]
+    assert g_t.shape == (3, 50, 50)
+    assert g_t1.shape == (3, 50, 50)
+    assert isinstance(g_t, torch.Tensor)
+    g_t_again, _ = ds2[0]
+    assert torch.equal(g_t, g_t_again)
