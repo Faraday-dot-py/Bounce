@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""Two-ball bounce simulation. All state needed to compute the next frame
-lives in the grid G. G[i][j] is a 11-channel cell:
+"""N-ball bounce simulation. Physics runs on an explicit list of ball
+states (arbitrary length, not stored in the grid). The grid G is a fixed
+3-channel field derived fresh from that list each frame -- its shape never
+changes with the number of balls:
   0: combined likelihood a ball occupies (i, j) -- what gets rendered
-  1-5: ball A's (likelihood, x, y, vx, vy) contribution to this cell
-  6-10: ball B's (likelihood, x, y, vx, vy) contribution to this cell
-Each ball's likelihood is splatted as a disk of the given radius (so the
-rendered blob is actually the ball's size, not just a point), and its exact
-(x, y, vx, vy) is stamped into every cell it touches -- so a ball's full
-state can be read back exactly from its own channels, with no drift near
-walls where the disk gets clipped asymmetrically. No per-frame state is
-kept outside the grid."""
+  1: probability-weighted mean vx of whatever ball(s) cover (i, j)
+  2: probability-weighted mean vy of whatever ball(s) cover (i, j)
+Each ball's likelihood is splatted as a disk of the given radius (linear
+falloff from center to edge). Where balls' disks overlap, channels 1-2
+hold the probability-weighted average velocity, not any one ball's exact
+value -- the grid is a rendering/summary view, not a lossless encoding.
+Channel 0 saturates smoothly toward 1 as overlapping weight accumulates
+(1 - exp(-sum)), rather than growing unbounded under heavy local density.
+
+Wall and ball-ball contact are continuous, force-based (a C1-smooth
+penalty force that turns on at overlap and grows with penetration depth),
+integrated via symplectic Euler alongside gravity -- no instantaneous
+velocity/position corrections anywhere, so total energy stays in a
+bounded oscillation instead of drifting.
+"""
 import argparse
 import math
+import random
 import sys
 import time
 
-PROB = 0
-A_PROB, A_X, A_Y, A_VX, A_VY = 1, 2, 3, 4, 5
-B_PROB, B_X, B_Y, B_VX, B_VY = 6, 7, 8, 9, 10
-NUM_CHANNELS = 11
+PROB, VX, VY = 0, 1, 2
+NUM_CHANNELS = 3
 
 
 def make_grid(n):
@@ -32,11 +40,11 @@ def clear_grid(G, n):
                 cell[c] = 0.0
 
 
-def splat_ball(G, n, state, radius, prob_ch, x_ch, y_ch, vx_ch, vy_ch):
+def splat_ball(G, n, state, radius):
     """Splat one ball's likelihood as a disk of the given radius (linear
-    falloff from center to edge) into its own channels, add it into the
-    combined display channel, and stamp its exact state into every cell it
-    touches."""
+    falloff from center to edge), accumulating weighted vx/vy sums into
+    channels 1-2 so they can be normalized into an average once every
+    ball has been splatted."""
     x, y, vx, vy = state["x"], state["y"], state["vx"], state["vy"]
     r = max(radius, 1e-6)
     i_lo = max(0, math.floor(x - r))
@@ -49,87 +57,106 @@ def splat_ball(G, n, state, radius, prob_ch, x_ch, y_ch, vx_ch, vy_ch):
             if d > r:
                 continue
             w = 1.0 - d / r
-            G[i][j][prob_ch] += w
-            G[i][j][x_ch] = x
-            G[i][j][y_ch] = y
-            G[i][j][vx_ch] = vx
-            G[i][j][vy_ch] = vy
             G[i][j][PROB] += w
+            G[i][j][VX] += w * vx
+            G[i][j][VY] += w * vy
 
 
-def splat_all(G, n, a, b, radius):
+def splat_all(G, n, balls, radius):
     clear_grid(G, n)
-    splat_ball(G, n, a, radius, A_PROB, A_X, A_Y, A_VX, A_VY)
-    splat_ball(G, n, b, radius, B_PROB, B_X, B_Y, B_VX, B_VY)
-
-
-def read_ball(G, n, prob_ch, x_ch, y_ch, vx_ch, vy_ch):
-    """Read a ball's exact state back from the first touched cell -- every
-    cell the ball's splat wrote to carries the same (x, y, vx, vy)."""
+    for state in balls:
+        splat_ball(G, n, state, radius)
     for row in G:
         for cell in row:
-            if cell[prob_ch] > 0.0:
-                return {"x": cell[x_ch], "y": cell[y_ch], "vx": cell[vx_ch], "vy": cell[vy_ch]}
-    return {"x": 0.0, "y": 0.0, "vx": 0.0, "vy": 0.0}
+            if cell[PROB] > 0.0:
+                cell[VX] /= cell[PROB]
+                cell[VY] /= cell[PROB]
+                # saturate after using the raw weight sum as the averaging
+                # denominator above -- smooth (C-infinity), asymptotes to 1
+                # instead of growing unbounded under many overlapping balls
+                cell[PROB] = 1.0 - math.exp(-cell[PROB])
 
 
-def move_and_bounce_off_walls(state, n, dt, gravity):
-    state["vx"] += gravity * dt
-    state["x"] += state["vx"] * dt
-    state["y"] += state["vy"] * dt
+def penalty_force(penetration, stiffness):
+    """C1-smooth repulsive force: zero (and zero-slope) at penetration <= 0,
+    growing as the square of penetration depth once bodies overlap. No jump
+    in value or derivative at the contact boundary."""
+    if penetration <= 0.0:
+        return 0.0
+    return stiffness * penetration * penetration
+
+
+def wall_force(state, n, radius, stiffness):
+    """Continuous force pushing a ball back once it overlaps a wall, in
+    place of the old hard position-reflect. Walls are treated as immovable,
+    so all of the force/energy goes into the ball."""
     lo, hi = 0.0, n - 1.0
-    if state["x"] < lo:
-        state["x"] = lo + (lo - state["x"])
-        state["vx"] = -state["vx"]
-    elif state["x"] > hi:
-        state["x"] = hi - (state["x"] - hi)
-        state["vx"] = -state["vx"]
-    if state["y"] < lo:
-        state["y"] = lo + (lo - state["y"])
-        state["vy"] = -state["vy"]
-    elif state["y"] > hi:
-        state["y"] = hi - (state["y"] - hi)
-        state["vy"] = -state["vy"]
+    fx = fy = 0.0
+    if state["x"] - lo < radius:
+        fx += penalty_force(radius - (state["x"] - lo), stiffness)
+    elif hi - state["x"] < radius:
+        fx -= penalty_force(radius - (hi - state["x"]), stiffness)
+    if state["y"] - lo < radius:
+        fy += penalty_force(radius - (state["y"] - lo), stiffness)
+    elif hi - state["y"] < radius:
+        fy -= penalty_force(radius - (hi - state["y"]), stiffness)
+    return fx, fy
 
 
-def resolve_collision(b1, b2, radius):
-    """Equal-mass elastic collision between two circular balls of the given
-    radius: swap the velocity component along the line connecting them, and
-    push them apart so they stop overlapping."""
+def ball_pair_force(b1, b2, radius, stiffness):
+    """Continuous repulsive force between two overlapping balls, directed
+    along their center line. Returns the force applied to b2 -- apply its
+    negation to b1 (Newton's third law, conserves momentum)."""
     dx = b2["x"] - b1["x"]
     dy = b2["y"] - b1["y"]
     dist = math.hypot(dx, dy)
-    min_dist = 2 * radius
-    if dist >= min_dist:
-        return
     if dist < 1e-9:
         nx, ny = 1.0, 0.0
         dist = 0.0
     else:
         nx, ny = dx / dist, dy / dist
-
-    v1n = b1["vx"] * nx + b1["vy"] * ny
-    v2n = b2["vx"] * nx + b2["vy"] * ny
-    if v1n - v2n > 0:  # balls approaching along the normal
-        b1["vx"] += (v2n - v1n) * nx
-        b1["vy"] += (v2n - v1n) * ny
-        b2["vx"] += (v1n - v2n) * nx
-        b2["vy"] += (v1n - v2n) * ny
-
-    overlap = min_dist - dist
-    b1["x"] -= nx * overlap / 2
-    b1["y"] -= ny * overlap / 2
-    b2["x"] += nx * overlap / 2
-    b2["y"] += ny * overlap / 2
+    f = penalty_force(2 * radius - dist, stiffness)
+    return f * nx, f * ny
 
 
-def step(G, n, dt, gravity, radius):
-    a = read_ball(G, n, A_PROB, A_X, A_Y, A_VX, A_VY)
-    b = read_ball(G, n, B_PROB, B_X, B_Y, B_VX, B_VY)
-    move_and_bounce_off_walls(a, n, dt, gravity)
-    move_and_bounce_off_walls(b, n, dt, gravity)
-    resolve_collision(a, b, radius)
-    splat_all(G, n, a, b, radius)
+def compute_forces(balls, n, gravity, radius, stiffness):
+    """Net force (== acceleration, unit mass) on each ball this step:
+    gravity + wall contact + pairwise ball contact."""
+    forces = [[gravity, 0.0] for _ in balls]
+    for idx, state in enumerate(balls):
+        fx, fy = wall_force(state, n, radius, stiffness)
+        forces[idx][0] += fx
+        forces[idx][1] += fy
+    for i in range(len(balls)):
+        for j in range(i + 1, len(balls)):
+            fx, fy = ball_pair_force(balls[i], balls[j], radius, stiffness)
+            forces[i][0] -= fx
+            forces[i][1] -= fy
+            forces[j][0] += fx
+            forces[j][1] += fy
+    return forces
+
+
+def integrate(balls, forces, dt):
+    """Semi-implicit (symplectic) Euler: velocity updated from force first,
+    then position updated from the new velocity. Keeps total energy
+    oscillating in a bounded band instead of drifting."""
+    for state, (fx, fy) in zip(balls, forces):
+        state["vx"] += fx * dt
+        state["vy"] += fy * dt
+        state["x"] += state["vx"] * dt
+        state["y"] += state["vy"] * dt
+
+
+def step(G, n, balls, dt, gravity, radius, stiffness, substeps):
+    """Advance by dt total, but in `substeps` smaller physics steps: the
+    penalty force is stiff enough that symplectic Euler needs a finer
+    resolution than one step per render frame to stay stable."""
+    sub_dt = dt / substeps
+    for _ in range(substeps):
+        forces = compute_forces(balls, n, gravity, radius, stiffness)
+        integrate(balls, forces, sub_dt)
+    splat_all(G, n, balls, radius)
 
 
 def color_for(value):
@@ -157,28 +184,44 @@ def render(G, n):
     sys.stdout.flush()
 
 
+def init_balls(num_balls, n, vy, rng):
+    balls = []
+    lo, hi = 0.0, n - 1.0
+    for _ in range(num_balls):
+        x = rng.uniform(lo, hi)
+        y = rng.uniform(lo, hi)
+        vx = rng.uniform(-vy, vy)
+        vy_ = rng.uniform(-vy, vy)
+        balls.append({"x": x, "y": y, "vx": vx, "vy": vy_})
+    return balls
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-n", type=int, default=15, help="grid size")
+    ap.add_argument("--balls", type=int, default=2, help="number of balls")
     ap.add_argument("--dt", type=float, default=0.15, help="time step")
     ap.add_argument("--fps", type=float, default=12.0, help="frames per second")
-    ap.add_argument("--vy", type=float, default=2.3, help="initial y speed (mirrored between the two balls)")
+    ap.add_argument("--vy", type=float, default=2.3, help="max initial speed magnitude, per axis")
     ap.add_argument("--gravity", type=float, default=9.0, help="acceleration toward bottom (row n-1)")
     ap.add_argument("--radius", type=float, default=0.75, help="ball radius, in grid cells (visual size and hitbox)")
+    ap.add_argument("--stiffness", type=float, default=400.0, help="penalty-force spring constant for wall/ball contact")
+    ap.add_argument("--substeps", type=int, default=8, help="physics sub-steps per rendered frame, for integrator stability")
+    ap.add_argument("--seed", type=int, default=4738, help="random seed for ball starts/velocities")
     args = ap.parse_args()
 
     n = args.n
-    a = {"x": 0.0, "y": (n - 1) * 0.3, "vx": 0.0, "vy": args.vy}
-    b = {"x": 0.0, "y": (n - 1) * 0.7, "vx": 0.0, "vy": -args.vy}
+    rng = random.Random(args.seed)
+    balls = init_balls(args.balls, n, args.vy, rng)
     G = make_grid(n)
-    splat_all(G, n, a, b, args.radius)
+    splat_all(G, n, balls, args.radius)
     frame_delay = 1.0 / args.fps
 
     try:
         while True:
             render(G, n)
             time.sleep(frame_delay)
-            step(G, n, args.dt, args.gravity, args.radius)
+            step(G, n, balls, args.dt, args.gravity, args.radius, args.stiffness, args.substeps)
     except KeyboardInterrupt:
         pass
 
