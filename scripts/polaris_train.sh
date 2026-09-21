@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 
 pip install -r requirements.txt
 
+mkdir -p checkpoints
+
 python -m model.train \
   --n 50 --min-balls 50 --max-balls 250 \
   --num-samples 3000 --batch-size 16 --epochs 20 \
