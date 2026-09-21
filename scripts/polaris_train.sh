@@ -8,15 +8,20 @@
 #SBATCH --output=bounce-stage1-%j.log
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 cd "$HOME/bounce"
 
+echo "[$(date -Iseconds)] starting pip install"
 pip install -r requirements.txt
+echo "[$(date -Iseconds)] pip install done"
 
 mkdir -p checkpoints
 
+echo "[$(date -Iseconds)] starting training"
 python -m model.train \
   --n 50 --min-balls 50 --max-balls 250 \
   --num-samples 3000 --batch-size 16 --epochs 20 \
   --embed-dim 128 --depth 6 --num-heads 4 --window-size 8 \
   --seed 4738 \
   --checkpoint checkpoints/stage1.pt
+echo "[$(date -Iseconds)] training done"
