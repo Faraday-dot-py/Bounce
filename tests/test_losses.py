@@ -37,6 +37,18 @@ def test_bg_weight_zero_ignores_background_error():
     assert loss_occ > 0.0
 
 
+def test_bg_weight_only_discounts_prob_channel():
+    target = torch.zeros(1, 3, 10, 10)
+    target[:, 0, 5, 5] = 1.0  # occupied pixel; rest of grid is background
+
+    pred_vel_err = target.clone()
+    pred_vel_err[:, 1, 0, 0] = 5.0  # VX error at a background pixel
+    weights = torch.tensor([0.0, 1.0, 0.0])
+    loss_vel_bg = occupancy_weighted_mse(pred_vel_err, target, weights, bg_weight=0.05)
+    loss_vel_uniform = weighted_channel_mse(pred_vel_err, target, weights)
+    assert torch.isclose(loss_vel_bg, loss_vel_uniform)
+
+
 def test_bg_weight_one_matches_weighted_channel_mse():
     pred = torch.randn(2, 3, 10, 10)
     target = torch.randn(2, 3, 10, 10)

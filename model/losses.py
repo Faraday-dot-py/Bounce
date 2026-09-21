@@ -7,7 +7,9 @@ def weighted_channel_mse(pred, target, weights):
 
 
 def occupancy_weighted_mse(pred, target, weights, bg_weight=0.05):
-    spatial_weight = torch.where(target[:, 0:1, :, :] > 1e-6, 1.0, bg_weight)
+    prob_spatial_weight = torch.where(target[:, 0:1, :, :] > 1e-6, 1.0, bg_weight)
+    spatial_weight = torch.ones_like(target)
+    spatial_weight[:, 0:1, :, :] = prob_spatial_weight
     weighted_sq_err = (pred - target) ** 2 * spatial_weight
     per_channel = weighted_sq_err.mean(dim=(0, 2, 3))
     return (per_channel * weights).sum()
