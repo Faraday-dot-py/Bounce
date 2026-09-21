@@ -27,3 +27,20 @@ def window_reverse(windows, window_size, H, W):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous()
     x = x.view(B, H, W, -1)
     return x
+
+
+def compute_shift_mask(H, W, window_size, shift_size, device):
+    img_mask = torch.zeros((1, H, W, 1), device=device)
+    h_slices = (slice(0, -window_size), slice(-window_size, -shift_size), slice(-shift_size, None))
+    w_slices = (slice(0, -window_size), slice(-window_size, -shift_size), slice(-shift_size, None))
+    cnt = 0
+    for h in h_slices:
+        for w in w_slices:
+            img_mask[:, h, w, :] = cnt
+            cnt += 1
+    mask_windows = window_partition(img_mask, window_size)
+    mask_windows = mask_windows.view(-1, window_size * window_size)
+    attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+    attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0))
+    attn_mask = attn_mask.masked_fill(attn_mask == 0, float(0.0))
+    return attn_mask
