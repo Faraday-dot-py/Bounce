@@ -15,6 +15,7 @@ def train(args):
         n=args.n,
         ball_range=(args.min_balls, args.max_balls),
         seed=args.seed,
+        cache_path=args.cache_path,
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     model = BounceNextFrameModel(
@@ -55,6 +56,7 @@ def build_arg_parser():
     ap.add_argument("--window-size", type=int, default=8)
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
     ap.add_argument("--checkpoint", type=str, default="checkpoint.pt")
+    ap.add_argument("--cache-path", type=str, default=None)
     return ap
 
 

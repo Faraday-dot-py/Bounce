@@ -23,5 +23,6 @@ python -m model.train \
   --num-samples 3000 --batch-size 16 --epochs 20 \
   --embed-dim 128 --depth 6 --num-heads 4 --window-size 8 \
   --seed 4738 \
-  --checkpoint checkpoints/stage1.pt
+  --checkpoint checkpoints/stage1.pt \
+  --cache-path checkpoints/dataset_cache.npz
 echo "[$(date -Iseconds)] training done"

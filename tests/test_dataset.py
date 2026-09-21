@@ -1,3 +1,4 @@
+import os
 import random
 import numpy as np
 import bounce
@@ -61,3 +62,16 @@ def test_bounce_pair_dataset_shapes_and_determinism():
     assert isinstance(g_t, torch.Tensor)
     g_t_again, _ = ds2[0]
     assert torch.equal(g_t, g_t_again)
+
+
+def test_bounce_pair_dataset_cache_roundtrip(tmp_path):
+    cache_path = str(tmp_path / "cache.npz")
+    ds1 = BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    assert os.path.exists(cache_path)
+    ds2 = BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    assert len(ds2) == len(ds1)
+    for i in range(len(ds1)):
+        g_t1, g_t1_next = ds1[i]
+        g_t2, g_t2_next = ds2[i]
+        assert torch.equal(g_t1, g_t2)
+        assert torch.equal(g_t1_next, g_t2_next)

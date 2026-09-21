@@ -1,3 +1,4 @@
+import os
 import random
 import time
 import numpy as np
@@ -46,7 +47,12 @@ class BouncePairDataset(Dataset):
 
     def __init__(self, num_samples, n, ball_range, seed, dt=0.15, gravity=9.0,
                  radius=0.75, stiffness=400.0, substeps=8, vy=2.3,
-                 cluster_radius=3.0, settle_steps=200):
+                 cluster_radius=3.0, settle_steps=200, cache_path=None):
+        if cache_path is not None and os.path.exists(cache_path):
+            self.samples = self._load_cache(cache_path)
+            print(f"[dataset] loaded {len(self.samples)} samples from {cache_path}", flush=True)
+            return
+
         self.samples = []
         rng = random.Random(seed)
         t_start = time.time()
@@ -67,6 +73,21 @@ class BouncePairDataset(Dataset):
             if (i + 1) % 100 == 0 or (i + 1) == num_samples:
                 elapsed = time.time() - t_start
                 print(f"[dataset] generated {i + 1}/{num_samples} samples ({elapsed:.1f}s elapsed)", flush=True)
+
+        if cache_path is not None:
+            self._save_cache(cache_path)
+            print(f"[dataset] saved {len(self.samples)} samples to {cache_path}", flush=True)
+
+    def _save_cache(self, cache_path):
+        g_t_arr = np.stack([s[0] for s in self.samples])
+        g_t1_arr = np.stack([s[1] for s in self.samples])
+        np.savez(cache_path, g_t=g_t_arr, g_t1=g_t1_arr)
+
+    @staticmethod
+    def _load_cache(cache_path):
+        data = np.load(cache_path)
+        g_t_arr, g_t1_arr = data["g_t"], data["g_t1"]
+        return [(g_t_arr[i], g_t1_arr[i]) for i in range(g_t_arr.shape[0])]
 
     def __len__(self):
         return len(self.samples)
