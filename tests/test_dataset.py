@@ -75,3 +75,13 @@ def test_bounce_pair_dataset_cache_roundtrip(tmp_path):
         g_t2, g_t2_next = ds2[i]
         assert torch.equal(g_t1, g_t2)
         assert torch.equal(g_t1_next, g_t2_next)
+
+
+def test_bounce_pair_dataset_cache_rejects_mismatched_config(tmp_path):
+    cache_path = str(tmp_path / "cache.npz")
+    BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    try:
+        BouncePairDataset(num_samples=4, n=50, ball_range=(5, 20), seed=4738, cache_path=cache_path)
+        assert False, "expected ValueError for mismatched cache config"
+    except ValueError:
+        pass
