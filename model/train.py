@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 
 from model.dataset import BouncePairDataset
 from model.net import BounceNextFrameModel
-from model.losses import weighted_channel_mse
+from model.losses import occupancy_weighted_mse
 
 
 def train(args):
@@ -30,7 +30,7 @@ def train(args):
         for g_t, g_t1 in loader:
             g_t, g_t1 = g_t.to(device), g_t1.to(device)
             pred = model(g_t)
-            loss = weighted_channel_mse(pred, g_t1, weights)
+            loss = occupancy_weighted_mse(pred, g_t1, weights, bg_weight=args.bg_weight)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -55,6 +55,7 @@ def build_arg_parser():
     ap.add_argument("--num-heads", type=int, default=4)
     ap.add_argument("--window-size", type=int, default=8)
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
+    ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--checkpoint", type=str, default="checkpoint.pt")
     ap.add_argument("--cache-path", type=str, default=None)
     return ap
