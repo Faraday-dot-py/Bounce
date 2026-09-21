@@ -8,7 +8,7 @@
 #SBATCH --output=bounce-stage1-%j.log
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$HOME/bounce"
 
 pip install -r requirements.txt
 
