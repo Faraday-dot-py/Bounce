@@ -1,4 +1,5 @@
 import random
+import time
 import numpy as np
 import torch
 import bounce
@@ -48,6 +49,7 @@ class BouncePairDataset(Dataset):
                  cluster_radius=3.0, settle_steps=200):
         self.samples = []
         rng = random.Random(seed)
+        t_start = time.time()
         for i in range(num_samples):
             scenario = self.SCENARIOS[i % len(self.SCENARIOS)]
             num_balls = rng.randint(*ball_range)
@@ -62,6 +64,9 @@ class BouncePairDataset(Dataset):
                 )
             g_t, g_t1 = generate_pair(balls, n, dt, gravity, radius, stiffness, substeps)
             self.samples.append((g_t, g_t1))
+            if (i + 1) % 100 == 0 or (i + 1) == num_samples:
+                elapsed = time.time() - t_start
+                print(f"[dataset] generated {i + 1}/{num_samples} samples ({elapsed:.1f}s elapsed)", flush=True)
 
     def __len__(self):
         return len(self.samples)
