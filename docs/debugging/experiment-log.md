@@ -240,3 +240,45 @@ tests accordingly (28/28 pass).
 Retraining as `stage2_flownet_h12_v3.pt` (job 2824) — required
 adaptation to the changed forward pass, not a hyperparameter sweep.
 Verification pending once job 2824 completes.
+
+## 2026-09-21 — v3 verified: step-1 fixed, oscillation/banding gone, VX drift persists (worse mechanism found)
+
+`stage2_flownet_h12_v3` (job 2824) verified via the standard pipeline:
+
+- Step-1 fixed: **0.88x** MSE-vs-copy-baseline (was 1.08x on v2, back
+  to beating the trivial baseline).
+- No period-2 oscillation, no strong horizontal banding.
+- **But VX drift persists** — worse than the pre-retrain counterfactual
+  predicted. `mean1` (VX) climbs monotonically from 0.016 to **1.30 by
+  step 30** (counterfactual on the old checkpoint predicted a plateau
+  around 0.14-0.16). Unbiased subagent review of the diagnostic grid
+  found a new periodic diagonal ripple pattern emerging from step ~12,
+  plus persistent top/bottom edge brightening.
+
+**Root cause of the persisting drift, found via a synthetic (no-model)
+probe**: `grid_sample`'s `padding_mode="border"` (needed for the
+gridding-artifact fix, `findings-gridding-artifact.md`) is **not
+mass-conserving under sustained one-directional flow**. Repeatedly
+shifting a synthetic ramp field (no model at all) with
+`padding_mode="border"`, `dx=0.6`/step, 20 steps: mean grew from 0.50
+to 0.71 — clamped boundary reads duplicate high-value edge content
+into the frame every step it's shifted the same direction, pumping the
+mean up. `padding_mode="reflection"` showed the same drift (0.50 ->
+0.71, nearly identical). `padding_mode="zeros"` doesn't pump (slight
+decay, 0.50 -> 0.47 over the same test) but that's the padding mode
+the gridding-artifact fix specifically moved away from, for good
+reason (100% OOB perimeter every step, edge brightening).
+
+Centering `correction` (previous fix) still helps — it removed the
+*correction-head-driven* part of the drift — but this newly-found
+padding-mode-driven drift is a second, independent, larger-magnitude
+mechanism that the centering fix doesn't touch, and retraining alone
+can't fix it either (it's a property of the warp op, not something
+gradient descent on this loss can learn around when the flow field
+itself needs to point consistently downward/outward under gravity).
+
+Dispatched a subagent (`docs/debugging/drift-padding-conservation-brief.md`)
+to find a fix that keeps the gridding-artifact fix intact while
+removing the directional mass-pumping — e.g. explicit per-step mass
+renormalization after the warp, a different boundary treatment, or
+something else. Not yet resolved.
