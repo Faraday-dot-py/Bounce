@@ -774,3 +774,69 @@ dissolution.md` — untested end-to-end (synthetic-loss-value evidence
 only, same caveat as every investigation in this chain) — but it is the
 first candidate worth an actual retrain+rollout-video validation before
 falling back to the honest-horizon-cap or redesign options.
+
+## 2026-09-22 — v8 retrain (tile16-sum mass-conservation): synthetic-probe promise does NOT hold at the real-model level, new dominant periodic-fan artifact
+
+Implemented `tile16`-sum mass-conservation as `mass_weight`/`mass_tile`
+params in `occupancy_weighted_mse` (`model/losses.py`, commit `92fe715`),
+wired through `model/train.py` (`--mass-weight`, `--mass-tile`), 3 new
+regression tests (33/33 pass). Retrained as `stage2_flownet_h12_v8.pt`
+(job 2831, same hyperparameters as v7 plus `--mass-weight 0.1
+--mass-tile 16`), completed cleanly in ~10 min, final training loss
+comparable scale to v7 (12.77 vs 12.30).
+
+**Step-1 accuracy**: v8 MSE ratio 0.78x baseline, a modest regression
+vs. v6's 0.71x and v7's 0.70x (`scripts/eval_step1_baseline.py`) —
+expected, since the mass term targets longer-horizon behavior, not
+step-1.
+
+**Rollout behavior — the important result.** An unbiased subagent
+review of a v6/v7/v8 diagnostic grid (steps 0-30, seed 4738) found v8
+does **not** land anywhere close to what the synthetic give-up-vs-commit
+probe predicted. Instead of holding structure longer or degrading more
+gracefully than v6/v7, v8 develops **a strong, regular diagonal-stripe/
+fan pattern that dominates the entire frame by steps 16-30** — far more
+severe and far earlier than the faint diagonal ripple found in v7's
+100-step rollout (`findings-long-horizon-lattice.md`, which only became
+frame-dominant around step 90-100, and even then stayed low-amplitude).
+v6 saturates to a bright blob, v7 fades toward black with a faint
+stripe remnant; v8 fills the entire frame with a dense periodic grating
+starting as early as step 8-12.
+
+**Assessment — this is not a contradiction of the earlier synthetic
+finding, but a real limit of that finding's scope.** The synthetic
+probe in `findings-mass-conservation-loss.md` evaluated the *loss
+value* of two hand-constructed candidate predictions (give-up vs.
+commit-with-drift); it never ran gradient descent, so it could not
+observe a third option gradient descent might discover: a periodic
+texture that satisfies both the tile-sum mass constraint (correct
+total mass per tile, everywhere) and the global peak constraint
+(plenty of local peaks) simultaneously, without needing any real
+per-ball localization. `findings-long-horizon-lattice.md` had already
+established that bicubic `grid_sample` resampling carries a latent
+periodic-texture bias, present in both v6 and v7, normally suppressed
+by real content. The mass term's constant, ubiquitous pressure to keep
+every tile's mass topped up appears to have given the optimizer a
+direct incentive to lean on that latent bias as a cheap, spatially-
+uniform way to satisfy the constraint everywhere at once — worse than
+either of v6/v7's failure modes because it's not a hedge that only
+shows up once give-up empties the frame, it's actively reinforced by
+the training objective from early rollout steps.
+
+**Recommendation: do not adopt v8. `stage2_flownet_h12_v6.pt` remains
+the current default** (same status as before this investigation chain
+started). `mass_weight`/`mass_tile` stay in `model/losses.py` and
+`model/train.py` (real, tested, useful primitives — e.g. for a lower
+weight or a follow-up investigation), but the checkpoint itself is not
+promoted. This is the clearest demonstration yet in this investigation
+chain of the standing risk flagged in every one of the synthetic-probe
+docs: synthetic single-step loss-value comparisons show whether a term
+*could* fix an incentive between two hand-picked candidates, not what
+a trained network actually converges to under gradient descent — real
+end-to-end validation is not optional, and in this case it overturned
+the recommendation. If mass-conservation is revisited, it should be at
+a substantially lower weight (the synthetic sweep never tested weight
+sensitivity for the sum-based terms the way the peak-term investigation
+did) and/or combined with an explicit penalty on the specific bicubic-
+texture frequency band identified in `findings-long-horizon-lattice.md`,
+rather than retried at the same nominal 0.1 weight.
