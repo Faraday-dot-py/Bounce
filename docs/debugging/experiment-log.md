@@ -639,3 +639,76 @@ weaker latent periodic bias that was previously masked by real content
 has nothing competing with it and grows to dominate. Not yet
 investigated further; relevant evidence for the redesign-scoping
 conversation, not a new independent bug to chase in isolation.
+
+## 2026-09-22 — three parallel investigations resolve the blur-vs-give-up tradeoff's open options
+
+Dispatched three parallel subagents against the three next-step options
+left open in `findings-peak-decay-dissolution.md`, plus the new
+periodic-lattice evidence from the 100-step v7 rollout. Briefs and full
+context: `docs/debugging/flownet-open-issues-v2.md`.
+
+**Option 1 — regional/local peak-preservation loss**
+(`findings-regional-peak-loss.md`): tested 8 formulations (global,
+tile4/8/16, top-k, per-connected-component, ball-centered window5)
+across 2-20 balls x 0.5-8px drift. A fixed 5x5 window centered on each
+ball's true position beats the current global peak term badly at low
+drift/moderate density (14-15/15 win rate), but two hard failure modes
+persist across every formulation tested: neighbor-masking (a give-up
+ball sharing a region with a correctly-predicted neighbor gets falsely
+credited) and a fixed-window ceiling (fails outright once drift exceeds
+the window's half-width). These trade off against each other — no
+region size escapes both. Even at 10x the current `peak_weight`, the
+hardest configs (20 balls, 4px drift) plateau at 60-80% win rate.
+**Conclusion: real, adoptable improvement over the global term, but not
+a resolution of the underlying tradeoff.**
+
+**Option 2 — honest rollout horizon** (`findings-honest-horizon.md`):
+Hungarian-matched ground-truth ball positions against predicted local
+maxima (recall + position error), 3 seeds x 4 densities (20/50/125/250
+balls) x 40 steps, cross-checked against an occlusion ceiling and a
+shuffled-peak null baseline. v7 is **not** longer-horizon-safe despite
+fixing the aggregate peak-decay metric — it drops below 50% recall
+almost immediately (step 1 vs. v6's step 4-7), sacrificing tracking
+breadth to keep one region sharp; past that it holds a small
+above-chance signal out to 40+ steps but concentrated in one
+unpredictable "give-up" blob, not usable as whole-scene tracking. v6
+decays to genuine chance-level (confirmed via null test) by step
+~10-12 regardless of density. **Recommended honest horizon (recall
+≥0.5): 6 steps sparse (20-50 balls), 4 steps medium (125), 1-2 steps
+dense (250) — same for both checkpoints.** Beyond ~10-12 steps neither
+checkpoint should be trusted for any purpose. Confirms this is an
+architectural/objective-level limit, not a training-progress one; the
+practical lever available today is capping scenario density, not
+rollout length.
+
+**New evidence — long-horizon periodic lattice**
+(`findings-long-horizon-lattice.md`): the diagonal ripple that grows to
+dominate the v7 100-step rollout by step 90-100 is a **third, distinct
+periodic bias** from the two already fixed this session (not the
+border/`padding_mode="zeros"` OOB mechanism, not the period-2 temporal
+oscillation). FFT shows a fine ~3-5px 2D diagonal weave, isolated via
+counterfactual to **bicubic `grid_sample` resampling's own kernel-scale
+texture** (added specifically to fix peak-decay) — swapping to
+bilinear shifts it back to the old coarse ~10-13px scale. This texture
+is latently present in both v6 and v7 identically (same bicubic-warp
+code) but collapses to near-zero in v6 by step 10, while staying
+substantial (9-42% of spectral power) indefinitely in v7 — it's not an
+independent bug, it's a second byproduct of the same bicubic-for-
+peak-decay tradeoff, unmasked once give-up empties the frame of
+competing real content.
+
+**Overall conclusion**: none of these three findings overturn the
+`findings-peak-decay-dissolution.md` diagnosis — they sharpen it.
+Regional peak-preservation is worth landing as an incremental
+improvement, but the honest-horizon numbers (single-digit steps at
+real densities, for both checkpoints) confirm the fundamental limit is
+real and roughly checkpoint-independent, and the new lattice finding
+shows that even the "fixed" side of the tradeoff (bicubic resampling)
+carries its own latent cost that only surfaces once give-up removes
+competing content. The three architecturally-scoped options from
+`findings-peak-decay-dissolution.md` are now: adopt regional
+peak-preservation as a modest quality bump, formally cap supported
+scenario density/horizon per the numbers above, or commit to the
+larger redesign (per-ball tracked state / probabilistic output) needed
+to genuinely resolve the tradeoff. Still a human design decision, not
+a bug to fix.
