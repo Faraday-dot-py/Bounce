@@ -282,3 +282,48 @@ to find a fix that keeps the gridding-artifact fix intact while
 removing the directional mass-pumping — e.g. explicit per-step mass
 renormalization after the warp, a different boundary treatment, or
 something else. Not yet resolved.
+
+## 2026-09-21 — real drift mechanism found: Jacobian oversampling, not padding mode; renormalization fix applied
+
+Subagent investigation (`docs/debugging/findings-padding-mass-conservation.md`)
+found the brief's own leading hypothesis (`padding_mode="border"`
+pumping mass) was real but **secondary** — a real-model counterfactual
+(`border` -> `zeros`, frozen weights) only cut VX drift ~40% (1.302 ->
+0.765), and a strictly-interior synthetic flow (padding mode never
+invoked, zero OOB by construction) still pumped mass 2.4x over 15
+steps. **Real mechanism: `grid_sample` does no Jacobian-determinant
+correction for locally convergent flow fields** — any region where
+predicted flow compresses gets structurally oversampled every
+autoregressive step, independent of padding mode. This is why
+`padding_mode="reflection"` also pumped nearly identically to
+`"border"` (1.285 vs 1.302).
+
+Tested 8 candidate fixes on frozen weights (renormalization variants,
+`max_flow` reduction, edge-only flow damping, `"zeros"`/`"reflection"`
+padding). Renormalizing PROB channel 0 only reduced VX drift ~26% (via
+the PROB->VX/VY coupling from the period-2 Jacobian probe) with no MSE
+regression (step-1 PROB MSE-vs-copy-baseline actually *improved*
+slightly, 0.841x vs baseline's 0.881x); renormalizing all 3 channels
+fully flattened the drift (1.302 -> 0.016) but was rejected as the
+default since it pins VX/VY's global mean to the initial frame for the
+whole rollout, not physically justified for velocity fields (though
+kept as a documented fallback).
+
+**Fix applied** (`model/net.py`, commit `284b03f`): after
+`warped + correction`, rescale channel 0 (PROB) so its frame-wide sum
+matches the pre-warp frame's sum:
+```python
+prob_in = g_t[:, 0:1].sum(dim=(2, 3), keepdim=True)
+prob_out = out[:, 0:1].sum(dim=(2, 3), keepdim=True)
+scale = prob_in / (prob_out + 1e-6)
+out = torch.cat([out[:, 0:1] * scale, out[:, 1:]], dim=1)
+```
+VX/VY (channels 1/2) deliberately left unrenormalized. Verified as a
+no-op whenever `correction` is already centered (centering already
+makes `correction`'s per-channel sum zero, so the only thing the
+renorm actually corrects is the warp's own Jacobian effect) — 28/28
+tests pass unchanged. Sanity rollout confirms PROB mass held exactly
+constant across 30 steps on an untrained model.
+
+Retraining as `stage2_flownet_h12_v4.pt` (job 2825). Verification
+pending once it completes.
