@@ -989,8 +989,40 @@ sane (~0.3-0.4). **Job 2842** (Polaris): re-run with the fix, otherwise
 identical config, `scripts/polaris_train_token_v2.sh` →
 `checkpoints/token_model_h12_v2.pt`.
 
-Still not done: honest-horizon rollout comparison against
-`stage2_flownet_h12_v6.pt` and the standing unbiased-video-review
-practice on job 2842's result, per the design spec's validation plan,
-before any conclusion about whether this architecture is worth
-adopting.
+**Job 2842 result**: completed (37m28s), loss plateaued at ~0.180 from
+epoch ~3 onward (dipped there, then drifted slightly back up as
+`sampling_p` ramped to 1.0), no further improvement through epoch 49.
+Rollout video + diagnostic grid (`scripts/render_token_diagnostic_grid.py`)
++ a 16-seed grid video (`scripts/render_token_multiseed_grid_video.py`,
+new this session) all reviewed by fresh unbiased subagents: the
+catastrophic instant off-grid collapse is gone, but a milder, fully
+consistent-across-all-16-seeds **gradual give-up dissolution** remains —
+frames track ground truth closely through step ~3, blur and drop objects
+one at a time through step 8, are majority-blank by step 12, nearly
+total by step 20. Root-caused further (user noticed the balls visibly
+drift toward one side before vanishing): traced actual `delta_pos`
+values step-by-step and found a sustained, non-decaying bias in the
+component matching the grid's column axis (screen-horizontal; bounce.py's
+row axis, where gravity acts, stays stable) — `delta_head.bias[1]
+≈ -0.38`, and mean per-step `delta_pos[:,1]` stays around -1.4 to -2.3
+throughout a 10-step probe. The simulator has no left/right bias
+(velocities spawn symmetrically), so this is a learned artifact: a
+smooth, gradual escape to the same "vanish off-grid, stop being
+penalized" state that job 2840 reached via one catastrophic jump —
+cheaper for the optimizer to find because it still gets partial credit
+for looking right during the first few steps, unlike an abrupt jump.
+Same underlying incentive (occupancy_weighted_mse still permits
+escape-to-vanish once tracking gets hard), different learned mechanism.
+
+**Next step, not yet done**: bump `peak_weight` (currently the
+flow-warp-derived default 0.1) and retrain — the peak term exists
+specifically to penalize the predicted peak intensity vanishing, which
+is exactly what this drift-to-vanish mechanism produces. Other
+candidates discussed but not started: more training data/epochs (per
+user's large-dataset/few-epoch-like-LLM-pretraining suggestion), or a
+mass-conservation term (has a documented history of its own periodic-
+texture failure mode on the flow-warp model, would need the same real-
+retrain validation). Still not done regardless of which lever is tried
+next: honest-horizon rollout comparison against `stage2_flownet_h12_v6.pt`,
+per the design spec's validation plan, before any conclusion about
+whether this architecture is worth adopting.
