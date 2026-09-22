@@ -7,9 +7,9 @@ class ResidualConvBlock(nn.Module):
     def __init__(self, channels, dilation):
         super().__init__()
         self.norm1 = nn.GroupNorm(8, channels)
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=dilation, dilation=dilation)
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=dilation, dilation=dilation, padding_mode="replicate")
         self.norm2 = nn.GroupNorm(8, channels)
-        self.conv2 = nn.Conv2d(channels, channels, 3, padding=dilation, dilation=dilation)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=dilation, dilation=dilation, padding_mode="replicate")
         self.act = nn.SiLU()
 
     def forward(self, x):
@@ -35,16 +35,26 @@ class BounceNextFrameModel(nn.Module):
     Flow and correction heads are zero-initialized so the model starts as
     an exact identity (out == g_t), matching the fact that "copy the last
     frame" is already a strong single-step baseline.
+
+    correction is tanh-bounded by max_correction, mirroring how flow is
+    tanh-bounded by max_flow -- an unbounded correction term was found to
+    give the autoregressive rollout a Jacobian eigenvalue < -1 (a period-2
+    limit cycle), see docs/debugging/findings-period2-oscillation.md.
+    grid_sample uses padding_mode="border" (not "zeros") and the conv
+    stack uses padding_mode="replicate" so border pixels don't see a hard
+    synthetic-zero discontinuity, see
+    docs/debugging/findings-gridding-artifact.md.
     """
 
-    def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0):
+    def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2):
         super().__init__()
         self.max_flow = max_flow
-        self.stem = nn.Conv2d(in_channels, channels, 3, padding=1)
+        self.max_correction = max_correction
+        self.stem = nn.Conv2d(in_channels, channels, 3, padding=1, padding_mode="replicate")
         dilations = [DILATIONS[i % len(DILATIONS)] for i in range(depth)]
         self.blocks = nn.ModuleList([ResidualConvBlock(channels, d) for d in dilations])
-        self.flow_head = nn.Conv2d(channels, 2, 3, padding=1)
-        self.correction_head = nn.Conv2d(channels, in_channels, 3, padding=1)
+        self.flow_head = nn.Conv2d(channels, 2, 3, padding=1, padding_mode="replicate")
+        self.correction_head = nn.Conv2d(channels, in_channels, 3, padding=1, padding_mode="replicate")
         nn.init.zeros_(self.flow_head.weight)
         nn.init.zeros_(self.flow_head.bias)
         nn.init.zeros_(self.correction_head.weight)
@@ -56,7 +66,7 @@ class BounceNextFrameModel(nn.Module):
         for block in self.blocks:
             x = block(x)
         flow = torch.tanh(self.flow_head(x)) * self.max_flow
-        correction = self.correction_head(x)
+        correction = torch.tanh(self.correction_head(x)) * self.max_correction
 
         ys, xs = torch.meshgrid(
             torch.arange(H, device=g_t.device, dtype=g_t.dtype),
@@ -69,5 +79,5 @@ class BounceNextFrameModel(nn.Module):
         norm_y = sample_y / max(H - 1, 1) * 2 - 1
         sample_grid = torch.stack([norm_x, norm_y], dim=-1)
 
-        warped = F.grid_sample(g_t, sample_grid, mode="bilinear", padding_mode="zeros", align_corners=True)
+        warped = F.grid_sample(g_t, sample_grid, mode="bilinear", padding_mode="border", align_corners=True)
         return warped + correction

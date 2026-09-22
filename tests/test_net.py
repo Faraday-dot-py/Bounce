@@ -42,13 +42,26 @@ def test_nonzero_flow_head_shifts_content():
 
 
 def test_correction_head_adds_local_delta_on_top_of_identity_warp():
-    model = BounceNextFrameModel(channels=16, depth=2)
+    # correction is tanh-bounded by max_correction (see
+    # docs/debugging/findings-period2-oscillation.md), so a saturating bias
+    # pushes correction toward max_correction, not toward the raw bias value.
+    model = BounceNextFrameModel(channels=16, depth=2, max_correction=0.2)
     with torch.no_grad():
-        model.correction_head.bias[0] = 0.5
+        model.correction_head.bias[0] = 10.0
     g_t = torch.zeros(1, 3, 20, 20)
     out = model(g_t)
-    assert torch.allclose(out[:, 0], torch.full_like(out[:, 0], 0.5), atol=1e-5)
+    assert torch.allclose(out[:, 0], torch.full_like(out[:, 0], 0.2), atol=1e-3)
     assert torch.allclose(out[:, 1:], g_t[:, 1:], atol=1e-5)
+
+
+def test_correction_head_is_bounded_by_max_correction():
+    model = BounceNextFrameModel(channels=16, depth=2, max_correction=0.2)
+    with torch.no_grad():
+        model.correction_head.bias[:] = 1000.0
+    g_t = torch.randn(1, 3, 20, 20)
+    out = model(g_t)
+    correction = out - g_t
+    assert correction.abs().max().item() <= 0.2 + 1e-4
 
 
 def test_gradients_flow_to_all_params():
