@@ -20,7 +20,7 @@ mkdir -p checkpoints
 echo "[$(date -Iseconds)] starting training"
 python -m model.train \
   --n 50 --min-balls 50 --max-balls 250 \
-  --num-samples 1500 --batch-size 16 --epochs 80 \
+  --num-samples 1500 --batch-size 16 --epochs 50 \
   --channels 64 --depth 7 --max-flow 4.0 \
   --horizon 12 \
   --peak-weight 0.1 \

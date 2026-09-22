@@ -840,3 +840,64 @@ sensitivity for the sum-based terms the way the peak-term investigation
 did) and/or combined with an explicit penalty on the specific bicubic-
 texture frequency band identified in `findings-long-horizon-lattice.md`,
 rather than retried at the same nominal 0.1 weight.
+
+## 2026-09-22 — richer temporal input (N-frame history) tested on both architectures: rejected on both, different failure modes
+
+Motivated by a design question about why collisions produce any
+uncertainty at all given deterministic physics: (1) collision outcomes
+are a chaotic/sensitive function of exact contact position+velocity, so
+small state-estimate error is amplified at contact; (2) both
+architectures only ever saw a single previous frame `g_t`, so VX/VY
+were learned/estimated quantities, not measured from real temporal
+data. Hypothesis: stacking the last N frames as input (finite-difference-
+style velocity context) might reduce state-estimate noise feeding into
+collisions. Dispatched two parallel agents in isolated git worktrees to
+test this independently on the current flow-warp architecture and the
+abandoned windowed-attention architecture (recovered from `f0e709b^`).
+Neither agent's work was merged to master — see worktree branches below.
+
+**Flow-warp architecture** (worktree branch
+`worktree-agent-a425f76b539cb1a76`, commit `31f3c18`): added a
+`history` arg to `BounceNextFrameModel` (stem takes `3*history` stacked
+channels; only the most recent frame is warped/corrected/renormalized,
+identity-at-init preserved). Trained `stage2_flownet_h12_v9.pt`
+(history=3, job 2834, same hyperparameters as v7/v8 otherwise).
+Step-1 MSE regressed to 0.77x baseline (v6/v7 were 0.70-0.71x). An
+unbiased subagent review found a new **dominant diagonal moiré/grating
+pattern from step 8 onward**, worse than either v6's blur or v7's
+give-up blob; blob-count check confirmed overcounting true ball count
+by 1.5-3x from step 5 on. **Not adopted** — root cause of the moiré not
+isolated. Findings: `docs/debugging/findings-richer-temporal-input.md`
+(in that worktree, not on master).
+
+**Windowed-attention architecture** (worktree branch
+`worktree-agent-aadfa949e665f5be6`, commit `be58cc0`): recovered the
+pre-`f0e709b` Swin-style backbone, widened the input stem for N-frame
+history the same way. Trained N=3 at the architecture's final
+best-tuned hyperparameters (job 2835) plus an N=1 baseline from the
+recovered code for direct comparison. Step-1 MSE **regressed** to 1.29x
+baseline (N=1 was 1.04x). The checkerboard/lattice artifact was
+**present and unchanged in onset/timing in both** N=1 and N=3 (onsets
+~step 8, dominates by step 20-30) — only its anisotropy shifted
+(vertical/corner-blob vs. horizontal banding). Confirms richer temporal
+input doesn't touch the window-partition-bias root cause documented
+back at the top of this log. **Not adopted.** Findings:
+`docs/debugging/findings-richer-temporal-input-windowed-attention.md`
+(in that worktree, not on master). Diagnostic grid:
+`videos/windowed_hist_comparison_grid.png` (copied to master's
+`videos/`, not git-tracked).
+
+**Conclusion**: richer temporal input is rejected as a lever on both
+architectures tried this session, each for a different reason (new
+moiré artifact on flow-warp; no artifact improvement plus regressed
+accuracy on windowed-attention). `stage2_flownet_h12_v6.pt` remains the
+overall project default. The underlying design question (how to reduce
+collision-time state-estimate noise) is still open — richer temporal
+input was one candidate answer and it didn't work; per-ball tracked
+state remains the untried larger-redesign option from the
+peak-decay/give-up investigation above.
+
+Also this session: standard training epoch count for future Polaris
+runs (`scripts/polaris_train.sh`, `scripts/polaris_train_v8.sh`) was
+turned down from 80 to 50 per user direction (most runs don't converge
+past there) — a project convention change, not an experiment result.
