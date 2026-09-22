@@ -44,6 +44,18 @@ class BounceNextFrameModel(nn.Module):
     stack uses padding_mode="replicate" so border pixels don't see a hard
     synthetic-zero discontinuity, see
     docs/debugging/findings-gridding-artifact.md.
+
+    correction is also re-centered per-channel per-step (its own spatial
+    mean subtracted) so it can only redistribute mass, not inject a
+    sustained per-channel bias -- an uncentered correction acted as an
+    undamped integrator, accumulating a one-directional drift over many
+    rollout steps. grid_sample uses mode="bicubic" instead of "bilinear":
+    repeated bilinear resampling is a structural source of numerical
+    diffusion under autoregressive self-feed (confirmed with a zero-model,
+    ground-truth-flow probe -- peak intensity collapsed to 13% by step 10
+    from bilinear resampling alone), bicubic preserves peak sharpness
+    substantially better. See
+    docs/debugging/findings-correction-drift-and-mass-dissolution.md.
     """
 
     def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2):
@@ -67,6 +79,7 @@ class BounceNextFrameModel(nn.Module):
             x = block(x)
         flow = torch.tanh(self.flow_head(x)) * self.max_flow
         correction = torch.tanh(self.correction_head(x)) * self.max_correction
+        correction = correction - correction.mean(dim=(2, 3), keepdim=True)
 
         ys, xs = torch.meshgrid(
             torch.arange(H, device=g_t.device, dtype=g_t.dtype),
@@ -79,5 +92,5 @@ class BounceNextFrameModel(nn.Module):
         norm_y = sample_y / max(H - 1, 1) * 2 - 1
         sample_grid = torch.stack([norm_x, norm_y], dim=-1)
 
-        warped = F.grid_sample(g_t, sample_grid, mode="bilinear", padding_mode="border", align_corners=True)
+        warped = F.grid_sample(g_t, sample_grid, mode="bicubic", padding_mode="border", align_corners=True)
         return warped + correction

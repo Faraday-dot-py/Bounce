@@ -41,27 +41,37 @@ def test_nonzero_flow_head_shifts_content():
     assert out[0, 0, 10, 10].item() < 0.5
 
 
-def test_correction_head_adds_local_delta_on_top_of_identity_warp():
-    # correction is tanh-bounded by max_correction (see
-    # docs/debugging/findings-period2-oscillation.md), so a saturating bias
-    # pushes correction toward max_correction, not toward the raw bias value.
+def test_uniform_correction_bias_is_centered_away():
+    # correction_head's raw output is uniform in space when its conv weight
+    # is zero (only bias contributes), and correction is re-centered per
+    # channel per step (its own spatial mean subtracted, see
+    # docs/debugging/findings-correction-drift-and-mass-dissolution.md) so
+    # it can only redistribute mass, not inject a sustained per-channel
+    # bias. A purely uniform correction should therefore cancel to exactly
+    # zero, leaving the identity warp untouched.
     model = BounceNextFrameModel(channels=16, depth=2, max_correction=0.2)
     with torch.no_grad():
         model.correction_head.bias[0] = 10.0
     g_t = torch.zeros(1, 3, 20, 20)
     out = model(g_t)
-    assert torch.allclose(out[:, 0], torch.full_like(out[:, 0], 0.2), atol=1e-3)
-    assert torch.allclose(out[:, 1:], g_t[:, 1:], atol=1e-5)
+    assert torch.allclose(out, g_t, atol=1e-4)
 
 
-def test_correction_head_is_bounded_by_max_correction():
+def test_correction_is_centered_and_bounded_per_channel():
+    # A spatially-varying raw correction (conv weight nonzero) should still
+    # be able to redistribute mass locally, but the *spatial mean* per
+    # channel must land at ~0 (centering), and no single cell can exceed
+    # 2*max_correction (the full tanh saturation range after centering).
     model = BounceNextFrameModel(channels=16, depth=2, max_correction=0.2)
-    with torch.no_grad():
-        model.correction_head.bias[:] = 1000.0
     g_t = torch.randn(1, 3, 20, 20)
+    raw = torch.randn(1, 3, 20, 20) * 50  # saturates tanh, varies spatially
+    model.correction_head.forward = lambda x: raw
     out = model(g_t)
+    # flow_head is zero-init, so flow=0 and bicubic grid_sample at an
+    # identity grid reproduces g_t exactly -> out - g_t is the correction.
     correction = out - g_t
-    assert correction.abs().max().item() <= 0.2 + 1e-4
+    assert torch.allclose(correction.mean(dim=(2, 3)), torch.zeros(1, 3), atol=1e-3)
+    assert correction.abs().max().item() <= 2 * model.max_correction + 1e-3
 
 
 def test_gradients_flow_to_all_params():
