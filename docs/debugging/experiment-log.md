@@ -712,3 +712,65 @@ scenario density/horizon per the numbers above, or commit to the
 larger redesign (per-ball tracked state / probabilistic output) needed
 to genuinely resolve the tradeoff. Still a human design decision, not
 a bug to fix.
+
+## 2026-09-22 — two more loss-reduction investigations: focal reweighting inert, local mass-conservation is the strongest lever found
+
+Two more parallel investigations, prompted by user design questions
+about the loss beyond the earlier regional-peak-loss/honest-horizon/
+lattice trio. Briefs: `docs/debugging/flownet-open-issues-v3.md` (focal
+reweighting) and `flownet-open-issues-v4.md` (mass-conservation loss).
+
+**Focal-style error reweighting** (`findings-focal-reweighted-loss.md`):
+tested power reweighting (`err^2 * |err|^gamma`) and a CenterNet-style
+confidence-modulated focal term on the same give-up-vs-commit synthetic
+probe. **Inert — no measurable effect.** Win rate stayed within
+15-trial sampling noise of the unweighted base loss (0.19-0.23 vs.
+0.213) across every gamma tested, with identical saturation pattern, and
+no synergy combined with `window5`. Root cause: give-up's and commit's
+dominant per-pixel errors are already comparable in *magnitude*, just at
+different pixel counts/locations — a purely magnitude-dependent
+monotonic reweighting scales both sides similarly and can't change which
+is cheaper. Correctly avoided rewarding hallucination (unlike `topk8`),
+but doesn't move the needle. Not worth pursuing further.
+
+**Local/regional mass-conservation loss**
+(`findings-mass-conservation-loss.md`): two parts.
+
+*Part A* — the model already hard-renormalizes global PROB mass every
+step (architectural, not a loss — `model/net.py`), so first checked
+whether that existing mechanism contributes to the give-up blob's
+visual character. Instrumented rollout (v7, seed 4738) confirmed the
+renorm rescale factor grows to ~1.3x by step 70-100, genuinely
+brightening the surviving blob, but relative spatial concentration
+(peak/total-mass) is actually *lower* with renorm on than off — renorm
+spreads its correction across the occupied footprint rather than piling
+onto one spot. Without renorm, mass hits exact zero by step ~35
+regardless of strategy (the warp+threshold pipeline is intrinsically
+lossy). **Renorm is a real but secondary contributor — brightens, does
+not cause, the concentration — and its main role is preventing total
+blackout.**
+
+*Part B* — extended the regional-peak-loss probe with a genuinely
+different operator: per-tile **integrated (summed) PROB mass** instead
+of per-tile **max**. `tile16` (sum) hit mean win-rate 0.753 vs. peak's
+best (`tile16` peak, 0.567), and critically **held up in the regime
+that broke every peak-based formulation** — 13/15 at 20 balls/8px drift
+vs. peak-`tile16`'s 1/15. Mechanism: sum is additive, so a
+confidently-predicted neighboring ball's peak can't fully mask a
+give-up ball's *missing* mass the way a shared "is there a peak
+somewhere here" check could. `window5`-sum performed on par with
+`window5`-peak, inheriting the same fixed-window drift ceiling.
+
+**This is the strongest single lever found across all four loss-level
+investigations this session** (regional-peak, honest-horizon,
+long-horizon-lattice, focal-reweighting, mass-conservation). Recommend
+prioritizing `tile16`-sum mass-conservation as the next real retrain
+candidate (over `window5`-peak, the prior leading candidate) — it's the
+first formulation tested that doesn't collapse in the
+high-density-and-high-drift regime that defines a real multi-ball
+rollout past the first few steps. Still does not, on its own, resolve
+the redesign-scale options (2)/(3) from `findings-peak-decay-
+dissolution.md` — untested end-to-end (synthetic-loss-value evidence
+only, same caveat as every investigation in this chain) — but it is the
+first candidate worth an actual retrain+rollout-video validation before
+falling back to the honest-horizon-cap or redesign options.
