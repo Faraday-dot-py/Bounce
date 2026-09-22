@@ -80,6 +80,21 @@ class BounceNextFrameModel(nn.Module):
     "quilt" artifact. Thresholding before the sum (and before scaling)
     removes the near-zero diffusion tail so it can't be counted as
     mass. See docs/debugging/findings-quilting-artifact.md.
+
+    VX/VY (channels 1/2) are additively recentered after each step so
+    their frame-wide *mean* matches the pre-warp frame's mean (unlike
+    PROB's multiplicative sum-rescale, since VX/VY are signed and can
+    sum near zero). The PROB-threshold fix above removed an accidental
+    brake on the same warp non-conservation bug documented in
+    docs/debugging/findings-padding-mass-conservation.md -- once PROB
+    stopped diffusing to near-uniform noise, the pre-existing,
+    always-latent VX/VY pump (100% attributable to grid_sample's lack
+    of Jacobian-determinant correction, not to `correction`, which is
+    already exactly zero-mean) ran unchecked instead of being
+    accidentally flattened by the diffuse PROB field. `correction`
+    being centered makes this equivalent to recentering immediately
+    after grid_sample (confirmed numerically). See
+    docs/debugging/findings-vx-drift-regression-v5.md.
     """
 
     def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2, prob_threshold=0.015):
@@ -124,5 +139,10 @@ class BounceNextFrameModel(nn.Module):
         prob_in = g_t[:, 0:1].sum(dim=(2, 3), keepdim=True)
         prob_out = prob_thresholded.sum(dim=(2, 3), keepdim=True)
         scale = prob_in / (prob_out + 1e-6)
-        out = torch.cat([prob_thresholded * scale, out[:, 1:]], dim=1)
-        return out
+        prob_final = prob_thresholded * scale
+
+        vxvy_in_mean = g_t[:, 1:].mean(dim=(2, 3), keepdim=True)
+        vxvy_out_mean = out[:, 1:].mean(dim=(2, 3), keepdim=True)
+        vxvy_final = out[:, 1:] - vxvy_out_mean + vxvy_in_mean
+
+        return torch.cat([prob_final, vxvy_final], dim=1)
