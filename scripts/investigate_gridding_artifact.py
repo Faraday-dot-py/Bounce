@@ -75,7 +75,7 @@ def instrumented_forward(model, g_t, padding_mode="zeros"):
     for block in model.blocks:
         xf = block(xf)
     flow = torch.tanh(model.flow_head(xf)) * model.max_flow
-    correction = model.correction_head(xf)
+    correction = torch.tanh(model.correction_head(xf)) * model.max_correction
     ys, xs = torch.meshgrid(
         torch.arange(H, device=g_t.device, dtype=g_t.dtype),
         torch.arange(W, device=g_t.device, dtype=g_t.dtype),
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     oob_masks = []
     with torch.no_grad():
         for step in range(30):
-            out, flow, correction, oob_mask = instrumented_forward(model, x, "zeros")
+            out, flow, correction, oob_mask = instrumented_forward(model, x, "border")
             oob_masks.append(oob_mask[0].numpy().copy())
             if step == 0:
                 flow_mag = flow[0].abs().mean(dim=0).numpy()
