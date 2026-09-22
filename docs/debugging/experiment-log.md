@@ -159,3 +159,84 @@ pipeline (`scripts/eval_step1_baseline.py`,
 `scripts/investigate_gridding_artifact.py` for the OOB/FFT metrics,
 and a full per-step stats dump to catch any residual oscillation)
 once job 2823 completes.
+
+## 2026-09-21 — v2 verified: edge/gridding + period-2 fixed, two new problems (drift, dissolution)
+
+`stage2_flownet_h12_v2` (job 2823) verified via the standard pipeline:
+
+- Edge/gridding fix worked: border-flow ratio 0.72x interior (was
+  2.20x), OOB fraction 0.038 (was 0.078), edge/interior PROB means now
+  track closely at every step.
+- Period-2 oscillation is gone (no more 5-15x frame-to-frame
+  alternation).
+- **Step-1 regressed to 1.08x** MSE-vs-copy-baseline (worse than doing
+  nothing), from 0.78-0.80x pre-fix — `max_correction=0.2` likely too
+  restrictive.
+- **New VX-channel drift**: not oscillating, but growing monotonically
+  from 0.016 to 1.43 by step 12, then collapsing back toward 0 by step
+  30 — produces visible horizontal banding, confirmed by an unbiased
+  subagent image review.
+
+Video sent, `scripts/investigate_gridding_artifact.py`'s stale
+`instrumented_forward` (still called the raw unbounded
+`correction_head` and hardcoded `padding_mode="zeros"`) fixed to match
+the real post-fix forward pass (commit `5ea4d2e`).
+
+Comparison video convention established: rollout/comparison `.mp4`s
+now go in `videos/` (repo root), not left only in `/tmp` or the repo
+root directly (`scripts/render_rollout_video.py` updated, commit
+`7fa684f`).
+
+## 2026-09-21 — VX drift + mass dissolution root-caused and fixed
+
+Dispatched a subagent (`docs/debugging/drift-investigation-brief.md`)
+to dig into the VX drift and a bigger question the user raised
+directly: "we need a way to keep the balls together, they seem to
+drift apart no matter what we do" — true across every architecture
+tried this session (windowed-attention, first flow-warp, this one).
+Findings: `docs/debugging/findings-correction-drift-and-mass-dissolution.md`.
+
+1. **VX drift = undamped integrator.** `correction[:,1]`'s per-step
+   *spatial mean* stayed same-signed (~+0.11 to +0.17) for steps 0-9
+   regardless of VX's growing magnitude; since bilinear/bicubic warping
+   is close to mean-preserving, `x[1].mean()` is essentially a running
+   sum of `correction`'s per-step mean (`cumsum` tracked the real
+   trajectory almost exactly). The magnitude cap (previous fix) bounds
+   any single step but does nothing about the sign staying consistent
+   for 12 steps straight. Tested 3 damping mechanisms via
+   counterfactual; **centering `correction` per-channel per-step**
+   (subtract its own spatial mean) won cleanly — peak |vx_mean| dropped
+   10x (1.43 → 0.14) and plateaued instead of drifting, verified to 80
+   steps.
+2. **Mass dissolution = structural, not just this bug.** Isolated test:
+   a single ball, real ground-truth flow, zero model involved, pure
+   `grid_sample(mode="bilinear")` warping — peak intensity collapsed to
+   13% by step 10 and <1% by step 16 from resampling alone.
+   `mode="nearest"` on the same test fully eliminated the collapse,
+   cleanly isolating bilinear's neighbor-averaging as the mechanism.
+   This is architecture-independent — plausibly why "balls drift apart
+   and dissolve" recurred across every model tried this session, each
+   for different specific reasons, but all resampling through
+   interpolation every autoregressive step. Diagnosis: **both** the
+   correction-head bug and the structural warp diffusion are real and
+   compounding, neither substitutes for the other.
+
+**Fixes applied** (`model/net.py`, commit `4ec5348`):
+```python
+correction = torch.tanh(self.correction_head(x)) * self.max_correction
+correction = correction - correction.mean(dim=(2, 3), keepdim=True)
+...
+warped = F.grid_sample(g_t, sample_grid, mode="bicubic", padding_mode="border", align_corners=True)
+```
+`mode="bicubic"` chosen over `nearest` (which fully eliminates blur in
+the idealized rigid-shift probe but risks aliasing under a real,
+per-pixel, non-integer predicted flow field) after a quick local
+probe: bicubic retained 0.24 peak intensity at step 10 vs. bilinear's
+0.07, in the same single-ball isolation test. Centering changes
+`correction_head`'s semantics — a spatially-uniform raw output now
+cancels to exactly zero (redistribution only, no level shift); updated
+tests accordingly (28/28 pass).
+
+Retraining as `stage2_flownet_h12_v3.pt` (job 2824) — required
+adaptation to the changed forward pass, not a hyperparameter sweep.
+Verification pending once job 2824 completes.
