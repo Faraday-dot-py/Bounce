@@ -410,3 +410,56 @@ Retraining as `stage2_flownet_h12_v5.pt` (job 2826) to let the model
 adapt to the new forward pass — required adaptation, not a
 hyperparameter sweep, same as every other forward-pass change this
 session. Verification pending.
+
+(Job 2826 failed fast on a stale `tests/test_dataset.py`/`model/dataset.py`
+mismatch on the remote Polaris copy, unrelated to this change — full
+`model/`+`tests/` sync fixed it, resubmitted as job 2827.)
+
+## 2026-09-22 — v5 verified: quilting fully fixed, but exposed a worse VX/VY drift regression
+
+`stage2_flownet_h12_v5` (job 2827) verified via the standard pipeline:
+
+- Step-1: **0.68x** MSE-vs-copy-baseline — best of any checkpoint this
+  session (previous best 0.83-0.87x across v1-v4), no regression.
+- **Quilting artifact fully eliminated**: unbiased subagent visual
+  review of a v4-vs-v5 side-by-side diagnostic grid found *zero*
+  blocky/tiled texture at any step in v5 (vs. v4's persistent coarse
+  patchwork from step ~8 onward) — instead v5 converges to a smooth,
+  gradually-flattening bright/dark boundary.
+- **But VX drift came back much worse**: a full 30-step stats dump
+  showed VX (mean1) climbing to a **1.37 peak** (vs. v4's 0.5 plateau)
+  before slowly decaying — worse than the VX drift problem that was
+  supposedly fixed twice already this session. Root-caused via
+  subagent (`docs/debugging/findings-vx-drift-regression-v5.md`): not
+  a new bug — v4's own diffuse-PROB quilting bug had been
+  *accidentally* flattening this same pre-existing `grid_sample`
+  Jacobian-non-conservation drift (already documented, deliberately
+  left unfixed for VX/VY in
+  `findings-padding-mass-conservation.md`) by spreading the field to
+  near-uniform noise, leaving nothing for convergent flow to
+  concentrate. Fixing the quilting bug correctly removed that
+  accidental brake, so the always-latent VX/VY pump ran unchecked.
+  Confirmed: 100% of the per-step VX/VY mean growth is attributable to
+  the warp step itself in both v4 and v5 (`correction`'s contribution
+  is exactly 0.0 every step, both checkpoints); v5's flow field is if
+  anything *smaller* than v4's, ruling out "the model learned more
+  aggressive flow".
+
+**Fix applied** (`model/net.py`, commit `4769282`): additively
+recenter VX/VY's frame-wide mean to match the pre-warp frame's mean,
+every step (signed-quantity analog of PROB's multiplicative renorm).
+Frozen-weight counterfactual on v5 exactly pins VX/VY to their initial
+values through 30 steps with no step-1 MSE cost. This is the second
+time leaving VX/VY unrenormalized has failed (first as unaddressed
+drift, now as a regression from an otherwise-correct fix) — the
+previously-documented "not physically justified" tradeoff (can't
+represent a genuine secular mean trend across the rollout) is now
+accepted given zero measured cost on every other tracked metric.
+29/29 tests pass (updated to check VX/VY exact identity in the
+zero-flow case, since recentering is a no-op there).
+
+Retraining as `stage2_flownet_h12_v6.pt` (job 2828) to adapt to both
+fixes together. Verification pending — standard pipeline plus the
+same 30-step per-channel stats dump used to catch this regression,
+since the diagnostic grid + MSE checks alone did not surface it (only
+the full stats dump comparing v4 vs v5 side by side did).
