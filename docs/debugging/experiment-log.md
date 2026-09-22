@@ -327,3 +327,41 @@ constant across 30 steps on an untrained model.
 
 Retraining as `stage2_flownet_h12_v4.pt` (job 2825). Verification
 pending once it completes.
+
+## 2026-09-22 — v4 verified: drift fixed, mass held exact, but a new blocky/tiled artifact appeared
+
+`stage2_flownet_h12_v4` (job 2825) verified via the standard pipeline:
+
+- Step-1: 0.87x MSE-vs-copy-baseline — consistent with v1-v3 (0.83-0.87x
+  across all four flownet checkpoints), no regression.
+- **PROB mass held exactly constant**: `sum0` = 67.181 at every single
+  step from 0 to 30 (direct confirmation the renormalization works
+  exactly as designed).
+- **VX/VY drift fixed**: VX (mean1) rises then *plateaus* around
+  0.52-0.57 from step ~16 onward (was climbing unboundedly to 1.30 in
+  v3); VY (mean2) similarly settles around -0.11 to -0.12. No more
+  runaway one-directional drift. No period-2 oscillation.
+- `max0` (peak intensity) still decays gradually from 0.81 to 0.04 over
+  30 steps — this is the separate, already-documented residual-
+  diffusion issue from `findings-correction-drift-and-mass-dissolution.md`
+  (bicubic reduces but doesn't eliminate resampling blur); not new, not
+  regressed by this fix.
+
+**But a new artifact appeared**: an unbiased subagent review of the
+diagnostic grid found sparse noise (steps 0-3) transitioning gradually
+through step 5, then a **sudden onset at step 8 of a coarse,
+axis-aligned blocky/tiled mosaic pattern** — large rectangular patches
+of relatively uniform brightness with grid-aligned edges, "patchwork/
+quilt" in character. This tiling persists and dominates through step
+30, with a bright hotspot developing in the upper-left region from
+step ~20 onward. Visually and structurally distinct from every prior
+artifact this session (windowed-attention checkerboard, the first
+flownet lattice/edge-brightening, the period-2 flicker, the diagonal
+ripple/horizontal banding from the drift bug) — not yet diagnosed.
+
+Video sent (`videos/stage2_flownet_v4_rollout_comparison.mp4`). Four
+architectural fixes now landed and verified working as designed
+(bounded+centered correction, border/replicate padding, bicubic
+resampling, PROB mass renormalization) — the drift/oscillation family
+of bugs is resolved. This new blocky-tiling artifact is a distinct,
+open problem, not yet investigated.
