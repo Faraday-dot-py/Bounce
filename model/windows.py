@@ -44,3 +44,14 @@ def compute_shift_mask(H, W, window_size, shift_size, device):
     attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0))
     attn_mask = attn_mask.masked_fill(attn_mask == 0, float(0.0))
     return attn_mask
+
+
+def compute_validity_mask(Hp, Wp, orig_H, orig_W, window_size, device, roll_shift=0):
+    valid = torch.zeros((1, Hp, Wp, 1), device=device)
+    valid[:, :orig_H, :orig_W, :] = 1.0
+    if roll_shift:
+        valid = torch.roll(valid, shifts=(-roll_shift, -roll_shift), dims=(1, 2))
+    mask_windows = window_partition(valid, window_size)
+    mask_windows = mask_windows.view(-1, window_size * window_size)
+    pair_valid = mask_windows.unsqueeze(1) * mask_windows.unsqueeze(2)
+    return torch.where(pair_valid > 0, torch.zeros_like(pair_valid), torch.full_like(pair_valid, -100.0))

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from model.windows import pad_to_multiple, window_partition, window_reverse, compute_shift_mask
+from model.windows import pad_to_multiple, window_partition, window_reverse, compute_shift_mask, compute_validity_mask
 from model.attention import WindowAttention
 
 
@@ -23,12 +23,20 @@ class SwinBlock(nn.Module):
 
         x, (orig_H, orig_W) = pad_to_multiple(x, self.window_size)
         Hp, Wp = x.shape[1], x.shape[2]
+        has_padding = (Hp != orig_H) or (Wp != orig_W)
 
         if self.shift_size > 0:
             x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
             mask = compute_shift_mask(Hp, Wp, self.window_size, self.shift_size, x.device)
+            if has_padding:
+                validity_mask = compute_validity_mask(
+                    Hp, Wp, orig_H, orig_W, self.window_size, x.device, roll_shift=self.shift_size,
+                )
+                mask = torch.maximum(mask, validity_mask)
         else:
             mask = None
+            if has_padding:
+                mask = compute_validity_mask(Hp, Wp, orig_H, orig_W, self.window_size, x.device)
 
         windows = window_partition(x, self.window_size)
         windows = windows.view(-1, self.window_size * self.window_size, C)
