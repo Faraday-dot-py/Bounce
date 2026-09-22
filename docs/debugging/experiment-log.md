@@ -82,3 +82,34 @@ verified as of this entry — see next entry or `git log` for the
 verification result.
 
 Commit: `f0e709b`
+
+## 2026-09-21 — flownet verified: real single-step win, two new long-horizon bugs
+
+`stage2_flownet_h12` (job 2822) step-1 MSE vs. copy-baseline: **0.80x**
+— best of any checkpoint tried (previous best 0.90x, most were
+1.0-1.35x, worse than doing nothing). Sparse ball structure now
+visibly survives to rollout step ~5 (vs. dissolving to noise by step 1
+under the old architecture).
+
+But two distinct problems remain at longer horizon, both found via the
+standard diagnostic-grid + unbiased-subagent pipeline plus a manual
+per-step stats dump:
+
+1. **Grid/lattice pattern re-emerges by step ~16-30**, plus edge/corner
+   brightening from step 8 on. Leading hypothesis: the dilation
+   schedule `(1, 2, 4, 8, 4, 2, 1)` in `model/net.py` is a textbook
+   setup for the "gridding artifact" in dilated CNNs (shared common
+   factor 2 across all dilations leaves periodic receptive-field gaps)
+   — not yet verified.
+2. **Period-2 brightness oscillation** starting ~step 14, confirmed via
+   per-step mean/max stats (alternates ~5-15x in magnitude every other
+   frame). Signature of an unstable/oscillating autoregressive fixed
+   point, likely undamped gain in the flow+correction path. Distinct
+   from problem 1, not caught by the diagnostic grid's sparse step
+   sampling (it happened to sample mostly one phase).
+
+Both under active investigation — see
+`docs/debugging/flownet-open-issues.md` for the full brief handed to
+investigating subagents, and `docs/debugging/findings-gridding-artifact.md`
+/ `docs/debugging/findings-period2-oscillation.md` for their conclusions
+once written.
