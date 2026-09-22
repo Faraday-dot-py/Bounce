@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset
 
 import bounce
-from model.dataset import make_scenario_uniform, make_scenario_clustered, make_scenario_settled
+from model.dataset import generate_scenario_balls
 
 
 def _copy_states(balls):
@@ -40,15 +40,10 @@ class BounceTokenSequenceDataset(Dataset):
         for i in range(num_samples):
             scenario = self.SCENARIOS[i % len(self.SCENARIOS)]
             num_balls = rng.randint(*ball_range)
-            if scenario == "uniform":
-                balls = make_scenario_uniform(num_balls, n, vy, rng)
-            elif scenario == "clustered":
-                balls = make_scenario_clustered(num_balls, n, vy, rng, cluster_radius)
-            else:
-                balls = make_scenario_settled(
-                    num_balls, n, vy, rng, radius, gravity, stiffness, dt,
-                    substeps, settle_steps,
-                )
+            balls = generate_scenario_balls(
+                scenario, num_balls, n, vy, rng, cluster_radius, radius, gravity,
+                stiffness, dt, substeps, settle_steps,
+            )
             frames, states = generate_token_sequence(
                 balls, n, dt, gravity, radius, stiffness, substeps, horizon
             )

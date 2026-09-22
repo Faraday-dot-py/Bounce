@@ -43,6 +43,21 @@ def make_scenario_settled(num_balls, n, vy, rng, radius, gravity, stiffness, dt,
     return balls
 
 
+def generate_scenario_balls(scenario, num_balls, n, vy, rng, cluster_radius, radius, gravity,
+                            stiffness, dt, substeps, settle_steps):
+    """Dispatch to the scenario builders. Shared by BounceSequenceDataset
+    and model.token_dataset.BounceTokenSequenceDataset so the two can't
+    drift apart on how a scenario is constructed."""
+    if scenario == "uniform":
+        return make_scenario_uniform(num_balls, n, vy, rng)
+    elif scenario == "clustered":
+        return make_scenario_clustered(num_balls, n, vy, rng, cluster_radius)
+    else:
+        return make_scenario_settled(
+            num_balls, n, vy, rng, radius, gravity, stiffness, dt, substeps, settle_steps,
+        )
+
+
 class BounceSequenceDataset(Dataset):
     SCENARIOS = ("uniform", "clustered", "settled")
 
@@ -64,15 +79,10 @@ class BounceSequenceDataset(Dataset):
         for i in range(num_samples):
             scenario = self.SCENARIOS[i % len(self.SCENARIOS)]
             num_balls = rng.randint(*ball_range)
-            if scenario == "uniform":
-                balls = make_scenario_uniform(num_balls, n, vy, rng)
-            elif scenario == "clustered":
-                balls = make_scenario_clustered(num_balls, n, vy, rng, cluster_radius)
-            else:
-                balls = make_scenario_settled(
-                    num_balls, n, vy, rng, radius, gravity, stiffness, dt,
-                    substeps, settle_steps,
-                )
+            balls = generate_scenario_balls(
+                scenario, num_balls, n, vy, rng, cluster_radius, radius, gravity,
+                stiffness, dt, substeps, settle_steps,
+            )
             frames = generate_sequence(balls, n, dt, gravity, radius, stiffness, substeps, horizon)
             self.samples.append(np.stack(frames))
             if (i + 1) % 100 == 0 or (i + 1) == num_samples:
