@@ -603,3 +603,39 @@ as a replacement default. Both checkpoints, and the three next-step
 options above, should be reviewed by a human before further model-side
 work continues, since the real remaining options are design decisions
 about the modeling approach, not bugs to fix.
+
+## 2026-09-22 — 100-step v7 rollout: "give up" collapse terminates in a periodic ripple/lattice, not inert black
+
+Rendered a longer (100-step, vs. the standard 30) rollout comparison on
+`stage2_flownet_h12_v7.pt` (`videos/stage2_flownet_v7_rollout_comparison_100step.mp4`,
+seed 4738) to see where the "give up as hedge" failure mode goes past
+the horizon already examined. Unbiased subagent frame-by-frame review
+(unprimed) found the collapse is progressive and one-way, not static
+once it starts:
+
+- Steps 0-5: sharp match to ground truth degrades almost immediately.
+- Steps 10-20: rapid content loss to near-black outside a few
+  surviving bright blobs; a faint diagonal ripple begins appearing.
+- Steps 25-50: mostly black except 2-3 static bright blobs (not
+  tracking ground truth's continued settling) plus an expanding faint
+  diagonal ripple/checkerboard texture.
+- Steps 50-100: the surviving bright blobs fade out entirely by
+  ~step 70-80; the ripple grows to **dominate the entire frame as a
+  fine periodic checkerboard/lattice by step 90-100** — low-amplitude,
+  no bright colors, no resemblance to ground truth's still-rich,
+  evenly-spread ball field. Never recovers.
+
+This adds a data point to the blur-vs-giveup writeup above: the "give
+up" hedge doesn't converge to inert/flat output at long horizon, it
+converges to a periodic lattice texture — visually reminiscent of this
+session's earlier checkerboard/edge-gridding artifacts (both already
+root-caused and fixed at short horizon: windowed-attention window bias,
+and conv zero-padding + `grid_sample` OOB perimeter). Plausible
+explanation: those fixes addressed the *specific* mechanisms that were
+producing a lattice at short horizon, but did not remove every
+periodic bias the conv/upsampling stack can express — once the model
+has abandoned confident content (per the give-up mechanism above), a
+weaker latent periodic bias that was previously masked by real content
+has nothing competing with it and grows to dominate. Not yet
+investigated further; relevant evidence for the redesign-scoping
+conversation, not a new independent bug to chase in isolation.
