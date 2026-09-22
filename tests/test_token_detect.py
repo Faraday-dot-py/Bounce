@@ -57,3 +57,15 @@ def test_find_token_positions_handles_empty_grid():
     prob = torch.zeros((20, 20))
     detected = find_token_positions(prob, radius=0.75)
     assert detected.shape == (0, 2)
+
+
+def test_centroid_near_returns_position_for_far_off_grid_query():
+    # Clamping an off-grid window used to leave i_lo > i_hi, which both
+    # sliced the grid with wrapped negative indices and made the arange
+    # over the window raise; the `total <= 1e-6` guard never got a chance
+    # to fire. Mass in the corner is what made the wrapped slice nonempty.
+    prob = torch.zeros((20, 20))
+    prob[0:2, 0:2] = 1.0
+    for coords in ([-50.0, -50.0], [-21.0, -21.0], [500.0, 500.0], [-21.0, 500.0]):
+        pos = torch.tensor(coords)
+        assert torch.equal(centroid_near(prob, pos, radius=0.75), pos)

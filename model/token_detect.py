@@ -14,10 +14,17 @@ def centroid_near(prob, position, radius, margin=1.0):
     have drifted further apart than the window covers."""
     n = prob.shape[0]
     half = int(math.ceil(radius + margin))
-    cx = int(round(float(position[0])))
-    cy = int(round(float(position[1])))
-    i_lo, i_hi = max(0, cx - half), min(n - 1, cx + half)
-    j_lo, j_hi = max(0, cy - half), min(n - 1, cy + half)
+    cx = int(round(float(position[0].detach())))
+    cy = int(round(float(position[1].detach())))
+    # Bail out before clamping if the raw window misses the grid entirely:
+    # clamping an off-grid window can leave i_lo > i_hi, which both slices
+    # nonsense (negative indices wrap) and makes the arange below raise.
+    i_lo_raw, i_hi_raw = cx - half, cx + half
+    j_lo_raw, j_hi_raw = cy - half, cy + half
+    if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+        return position
+    i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+    j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
     window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
     total = window.sum()
     if total <= 1e-6:

@@ -30,8 +30,12 @@ def test_gradients_flow_to_attention_parameters():
     torch.manual_seed(4738)
     model = TokenDynamics(hidden_dim=8, neighbor_radius=3.0)
     positions = torch.tensor([[5.0, 5.0], [6.0, 5.0]], requires_grad=True)
-    velocities = torch.zeros(2, 2)
-    hidden = torch.zeros(2, 8)
+    # Nonzero node features: the query is built from (velocity, hidden)
+    # only, so all-zero node features would make the query weight's
+    # gradient vanish for the trivial reason that its input is zero,
+    # testing nothing about whether gradients reach the attention layer.
+    velocities = torch.tensor([[1.0, -0.5], [0.25, 2.0]])
+    hidden = torch.randn(2, 8)
     delta_pos, delta_vel, new_hidden = model(positions, velocities, hidden)
     loss = new_hidden.sum()
     loss.backward()
@@ -54,3 +58,21 @@ def test_isolated_token_unaffected_by_distant_tokens():
 
     assert torch.allclose(hidden_a[0], hidden_b[0], atol=1e-6)
     assert torch.allclose(hidden_a[1], hidden_b[1], atol=1e-6)
+
+
+def test_forward_is_translation_invariant():
+    # Stronger than the locality test above: the whole configuration is
+    # shifted, so every token still sees an identical local neighbourhood.
+    # Absolute position must not reach the network at all, or
+    # train-small/tile-large transfer is meaningless.
+    torch.manual_seed(4738)
+    model = TokenDynamics(hidden_dim=8, neighbor_radius=3.0)
+    positions = torch.tensor([[5.0, 5.0], [6.0, 5.5], [5.2, 7.0]])
+    velocities = torch.tensor([[1.0, -0.5], [-0.3, 0.8], [0.0, 2.0]])
+    hidden = torch.randn(3, 8)
+
+    base = model(positions, velocities, hidden)
+    shifted = model(positions + 500.0, velocities, hidden)
+
+    for original, moved in zip(base, shifted):
+        assert torch.allclose(original, moved, atol=1e-6)

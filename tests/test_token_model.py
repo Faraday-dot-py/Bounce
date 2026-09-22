@@ -83,3 +83,75 @@ def test_step_blends_toward_observation_for_non_occluding_token():
 
     assert torch.allclose(new_pos, true_obs_pos, atol=0.1)
     assert not torch.allclose(new_pos, positions, atol=0.1)
+
+
+def test_isolated_token_tracks_its_velocity_under_default_observation_weight():
+    # Regression for the time-alignment bug: `observed_frame` is the grid
+    # at the same time as the input positions, so blending it into an
+    # already-advanced prediction (and differencing it against the input
+    # position to fake a velocity) drove tracked velocity toward zero
+    # every step. A single isolated token fed its own true frame must
+    # advance by exactly velocity*dt per step at the shipped default
+    # observation_weight, not freeze or oscillate.
+    torch.manual_seed(4738)
+    # radius=1.5 (the fixture radius the other observation tests in this
+    # file use) so centroid_near reads the true centre accurately; at the
+    # production radius=0.75 a ball covers too few cells for an unbiased
+    # centroid, an accepted separate limitation that would otherwise blur
+    # the timing property under test here.
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt)
+    assert model.observation_weight == 0.5
+
+    velocity = torch.tensor([[2.0, 1.0]])
+    true_pos = torch.tensor([[5.0, 5.0]])
+    positions = true_pos.clone()
+    velocities = velocity.clone()
+    hidden = torch.zeros(1, model.dynamics.hidden_dim)
+
+    for _ in range(6):
+        observed_frame = rasterize_tokens(true_pos, velocity, n, radius)
+        previous = positions
+        positions, velocities, hidden, _ = model.step(positions, velocities, hidden, observed_frame)
+        true_pos = true_pos + velocity * dt
+        assert torch.allclose(positions - previous, velocity * dt, atol=0.05)
+        assert torch.allclose(velocities, velocity, atol=1e-5)
+
+    assert torch.allclose(positions, true_pos, atol=0.05)
+
+
+def test_gate_suppresses_observation_inside_the_detection_window_band():
+    # 2.0 cells apart at radius=0.75 is outside the physical contact
+    # threshold (2*radius = 1.5) but inside centroid_near's window reach,
+    # so the observation is contaminated and must be gated off.
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    positions = torch.tensor([[10.0, 10.0], [12.0, 10.0]])
+    velocities = torch.zeros(2, 2)
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    observed_frame = torch.rand(3, n, n)  # arbitrary/irrelevant if gate works
+
+    new_pos, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+
+    assert torch.allclose(new_pos, positions, atol=1e-5)
+
+
+def test_init_tokens_zeros_velocity_for_implausible_nearest_match():
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt)
+    zero_vel = torch.zeros(1, 2)
+    frame0 = rasterize_tokens(torch.tensor([[5.0, 5.0]]), zero_vel, n, radius)
+    # frame1 keeps the real ball (small, plausible displacement) and adds a
+    # spurious detection far away, whose only possible match is the ball at
+    # (5, 5) roughly 14 cells off -- ~94 cells/s, physically impossible.
+    real = torch.tensor([[5.3, 5.15]])
+    spurious = torch.tensor([[15.0, 15.0]])
+    frame1 = rasterize_tokens(torch.cat([real, spurious]), torch.zeros(2, 2), n, radius)
+
+    positions, velocities, _ = model.init_tokens(frame0, frame1)
+    assert positions.shape[0] == 2
+    far = torch.norm(positions - torch.tensor([[15.0, 15.0]]), dim=1).argmin()
+    near = 1 - far
+    assert torch.allclose(velocities[far], torch.zeros(2), atol=1e-6)
+    assert torch.norm(velocities[near]) > 0.5

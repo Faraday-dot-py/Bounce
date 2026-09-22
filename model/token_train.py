@@ -24,6 +24,9 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights):
     the recurrence regardless of self-feed; only the *observed grid* fed
     into the observation branch is swapped for the model's own (detached)
     prediction on a self-fed step."""
+    device = next(model.parameters()).device
+    grid_seq = grid_seq.to(device)
+    weights = weights.to(device)
     positions, velocities, hidden = model.init_tokens(grid_seq[0], grid_seq[1])
     observed_frame = grid_seq[1]
     total_loss = grid_seq.new_zeros(())
@@ -47,10 +50,11 @@ def train(args):
         seed=args.seed, horizon=args.horizon,
     )
     loader = DataLoader(dataset, batch_size=None, shuffle=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
-                        neighbor_radius=args.neighbor_radius)
+                        neighbor_radius=args.neighbor_radius).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    weights = torch.tensor([1.0, 0.1, 0.1])
+    weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
     for epoch in range(args.epochs):
         sampling_p = sampling_probability(epoch, args.ramp_epochs)
@@ -59,6 +63,7 @@ def train(args):
             loss = token_rollout_loss(model, grid_seq, args.horizon, sampling_p, weights)
             opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             opt.step()
             epoch_loss += loss.item()
         print(f"epoch {epoch} sampling_p={sampling_p:.2f} loss={epoch_loss / len(dataset):.4f}", flush=True)

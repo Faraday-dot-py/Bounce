@@ -4,11 +4,14 @@ import torch
 def occluding_mask(positions, radius):
     """Per-token boolean mask: True if this token's position is within
     2*radius of any other token -- the same contact-overlap condition as
-    bounce.py's ball_pair_forces (`2 * radius - dist`). Intended to be
-    called on *predicted* (not yet observed) positions, per the design
-    spec's Occlusion gate section, so the gate anticipates an upcoming
-    overlap before it's observed rather than reacting to already-blended
-    pixels."""
+    bounce.py's ball_pair_forces (`2 * radius - dist`) when `radius` is
+    the physical ball radius. Callers decide which radius to pass:
+    TokenModel passes a widened one (see TokenModel._gate_radius) because
+    the question it needs answered is not "are these balls touching" but
+    "can a neighbour contaminate this token's centroid readout", which
+    starts further out. Called on positions at the same time instant as
+    the frame being read, since that is what determines whether that
+    frame's pixels are already blended."""
     n = positions.shape[0]
     if n < 2:
         return torch.zeros(n, dtype=torch.bool, device=positions.device)
