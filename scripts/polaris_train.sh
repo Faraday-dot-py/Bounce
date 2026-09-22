@@ -20,10 +20,10 @@ mkdir -p checkpoints
 echo "[$(date -Iseconds)] starting training"
 python -m model.train \
   --n 50 --min-balls 50 --max-balls 250 \
-  --num-samples 3000 --batch-size 16 --epochs 20 \
+  --num-samples 3000 --batch-size 16 --epochs 200 \
   --embed-dim 128 --depth 6 --num-heads 4 --window-size 8 \
   --horizon 3 \
   --seed 4738 \
-  --checkpoint checkpoints/stage2.pt \
+  --checkpoint checkpoints/stage2_200ep.pt \
   --cache-path checkpoints/dataset_cache_seq.npz
 echo "[$(date -Iseconds)] training done"
