@@ -901,3 +901,68 @@ Also this session: standard training epoch count for future Polaris
 runs (`scripts/polaris_train.sh`, `scripts/polaris_train_v8.sh`) was
 turned down from 80 to 50 per user direction (most runs don't converge
 past there) — a project convention change, not an experiment result.
+
+## 2026-09-22 — token-per-ball model designed, implemented, and first real training run submitted (job 2840)
+
+New architecture (design doc `docs/superpowers/specs/2026-09-22-token-per-ball-model-design.md`,
+plan `docs/superpowers/plans/2026-09-22-token-per-ball-model.md`): each
+ball is a persistent tracked token (position/velocity/hidden state)
+instead of an implicit pattern in a dense grid, with radius-graph
+attention for collision dynamics (locality bias, needed for the
+train-small/tile-large goal) and a predictive occlusion gate deciding
+whether to trust a fresh grid observation or run open-loop through a
+contact event. Output is still rasterized through `bounce.py`'s exact
+splat formula, so it stays comparable to the flow-warp baselines'
+loss/eval pipeline. Motivated by the same open question flagged at the
+end of the richer-temporal-input investigation: collision-time state
+noise, this time addressed via explicit per-token tracking rather than
+more grid-frame context.
+
+Implemented via subagent-driven development, 10 tasks, each with an
+independent implementer + task-reviewer + fix-round cycle. Three plan
+defects were caught and fixed along the way (test fixtures whose
+radius/position combination didn't give the sub-pixel resolution their
+assertions assumed; a real zero-gradient bug in the planned attention
+code for single-neighbor tokens, fixed with a standard GAT self-loop).
+
+**A final whole-branch review (dispatched on a more capable model)
+found 3 Critical defects that had survived all 10 task-level reviews**,
+because every task's unit tests happened to exercise a degenerate
+configuration (`observation_weight=0.0`, detection radius=1.5, one
+fixed grid origin) that the assembled system never actually runs at:
+
+1. Off-grid detection crash (`RuntimeError` in `centroid_near` when a
+   token drifts past the grid edge).
+2. Time-misaligned observation blend: `TokenModel.step` compared a
+   time-(t+1) prediction against a time-t observed frame, producing a
+   near-zero "velocity" that multiplicatively destroyed tracked
+   velocity every step at the shipped default `observation_weight=0.5`
+   (verified: velocity `[2.0, 1.0]` collapsed to `[0.32, ~0]` within 2
+   steps before the fix).
+3. `TokenDynamics`'s attention consumed absolute token position, not
+   relative geometry — translating an identical local 2-token
+   configuration by a tile-scale offset produced completely different
+   outputs, which would have made any tile-transfer validation result
+   meaningless.
+
+All three fixed in one fix wave and independently re-verified (exact
+translation invariance now confirmed, `[2.0, 1.0]` velocity now holds
+exactly across a 6-step diagnostic at the shipped default). Two
+findings were ruled accepted, documented limitations rather than bugs:
+detection accuracy at the production ball radius (0.75) is
+meaningfully weaker than at the radius used in some unit test fixtures
+(1.5) — real, unavoidable resolution limit, not something to engineer
+around yet — and there's no token re-acquisition path if one drifts
+off-grid (now much rarer after the velocity-matching bound added
+alongside fix #2, revisit only if it resurfaces). Merged to master
+(10 commits + fix wave, 73/73 tests passing).
+
+**Job 2840** (Polaris, gpu01): first real training-scale run per the
+design spec's staged validation plan — `n=20`, `2-6` balls, `horizon=12`,
+50 epochs, seed 4738, `scripts/polaris_train_token_v1.sh` →
+`checkpoints/token_model_h12_v1.pt`. This is a training-scale sanity
+run, not yet a head-to-head comparison against `stage2_flownet_h12_v6.pt`
+— honest-horizon rollout comparison and the standing unbiased-video-review
+practice still need to happen once this completes, per the design
+spec's validation plan, before any conclusion about whether this
+architecture is worth adopting.
