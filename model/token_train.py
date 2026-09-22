@@ -15,7 +15,8 @@ def sampling_probability(epoch, ramp_epochs):
     return min(1.0, max(0.0, epoch / ramp_epochs))
 
 
-def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights):
+def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
+                        bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -23,7 +24,13 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights):
     state (positions/velocities/hidden) always carries forward through
     the recurrence regardless of self-feed; only the *observed grid* fed
     into the observation branch is swapped for the model's own (detached)
-    prediction on a self-fed step."""
+    prediction on a self-fed step.
+
+    `token_grid_loss` is occupancy-weighted (see model/token_losses.py),
+    not a plain per-pixel MSE -- a first real training run (job 2840)
+    using plain MSE converged to an all-background "give up" solution,
+    since predicting nothing scores better than a present-but-imperfect
+    ball under a loss that doesn't down-weight background."""
     device = next(model.parameters()).device
     grid_seq = grid_seq.to(device)
     weights = weights.to(device)
@@ -32,11 +39,16 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights):
     total_loss = grid_seq.new_zeros(())
     num_steps = max(horizon - 1, 1)
     for step in range(num_steps):
+        source_grid = observed_frame
         positions, velocities, hidden, pred_grid = model.step(
             positions, velocities, hidden, observed_frame
         )
         target_grid = grid_seq[step + 2]
-        total_loss = total_loss + token_grid_loss(pred_grid, target_grid, weights)
+        total_loss = total_loss + token_grid_loss(
+            pred_grid, target_grid, source_grid, weights,
+            bg_weight=bg_weight, peak_weight=peak_weight,
+            mass_weight=mass_weight, mass_tile=mass_tile,
+        )
         self_feed = random.random() < sampling_p
         observed_frame = pred_grid.detach() if self_feed else target_grid
     return total_loss / num_steps
@@ -60,7 +72,10 @@ def train(args):
         sampling_p = sampling_probability(epoch, args.ramp_epochs)
         epoch_loss = 0.0
         for grid_seq, _ in loader:
-            loss = token_rollout_loss(model, grid_seq, args.horizon, sampling_p, weights)
+            loss = token_rollout_loss(
+                model, grid_seq, args.horizon, sampling_p, weights,
+                bg_weight=args.bg_weight, peak_weight=args.peak_weight,
+            )
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -81,7 +96,13 @@ def main():
     ap.add_argument("--ramp-epochs", type=int, default=25)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--hidden-dim", type=int, default=32)
-    ap.add_argument("--neighbor-radius", type=float, default=3.0)
+    # Must stay above TokenModel's occlusion-gate threshold
+    # (2*(radius+detect_margin) = 3.5 at defaults), or every token with a
+    # graph neighbor is also gated off from observation correction (see
+    # docs/debugging/experiment-log.md, job 2840).
+    ap.add_argument("--neighbor-radius", type=float, default=4.0)
+    ap.add_argument("--bg-weight", type=float, default=0.05)
+    ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--checkpoint", type=str, default="checkpoint_token.pt")
     args = ap.parse_args()
