@@ -960,9 +960,37 @@ alongside fix #2, revisit only if it resurfaces). Merged to master
 **Job 2840** (Polaris, gpu01): first real training-scale run per the
 design spec's staged validation plan — `n=20`, `2-6` balls, `horizon=12`,
 50 epochs, seed 4738, `scripts/polaris_train_token_v1.sh` →
-`checkpoints/token_model_h12_v1.pt`. This is a training-scale sanity
-run, not yet a head-to-head comparison against `stage2_flownet_h12_v6.pt`
-— honest-horizon rollout comparison and the standing unbiased-video-review
-practice still need to happen once this completes, per the design
-spec's validation plan, before any conclusion about whether this
-architecture is worth adopting.
+`checkpoints/token_model_h12_v1.pt`. Completed (29m39s, exit 0), but
+loss was essentially flat (0.1569→0.1540 over 50 epochs). Root-caused,
+not just hyperparameter noise: downloaded the checkpoint and probed
+`TokenDynamics` directly — `delta_pos` was ~-30 cells (vs. sane ~0.3-0.4),
+flinging every token off-grid within one step. An unbiased subagent's
+review of a diagnostic step-grid (`scripts/render_token_diagnostic_grid.py`,
+new this session) independently confirmed a sudden total blank-out at
+step 2 (not a gradual fade), matching. Root cause: `token_grid_loss`
+used a plain, unweighted per-pixel MSE (`weighted_channel_mse`), and
+with the grid ~97% background, an all-empty "give up" prediction scores
+better than a present-but-imperfectly-positioned ball — the exact same
+degenerate solution already characterized for the flow-warp architecture
+(`findings-peak-decay-dissolution.md`), reached here by the dynamics
+network learning a large constant offset instead of by blur. Separately
+confirmed (direct measurement: 37/79 tokens gated "occluding" at init)
+that the occlusion gate's effective threshold (3.5) sits above the
+default `neighbor_radius` (3.0), silently disabling observation
+correction for any token with a graph neighbor at all.
+
+Fixed (commit `31c66c4`): `token_grid_loss` now reuses
+`occupancy_weighted_mse` (same background-downweighting/peak-term
+approach already proven for the flow-warp models) instead of
+`weighted_channel_mse`; default `neighbor_radius` raised 3.0→4.0 to sit
+above the gate threshold. Local smoke test (100 samples, 8 epochs):
+loss now decreases monotonically (0.1868→0.1713) and `delta_pos` stays
+sane (~0.3-0.4). **Job 2842** (Polaris): re-run with the fix, otherwise
+identical config, `scripts/polaris_train_token_v2.sh` →
+`checkpoints/token_model_h12_v2.pt`.
+
+Still not done: honest-horizon rollout comparison against
+`stage2_flownet_h12_v6.pt` and the standing unbiased-video-review
+practice on job 2842's result, per the design spec's validation plan,
+before any conclusion about whether this architecture is worth
+adopting.
