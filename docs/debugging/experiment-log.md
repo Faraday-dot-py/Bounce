@@ -113,3 +113,49 @@ Both under active investigation — see
 investigating subagents, and `docs/debugging/findings-gridding-artifact.md`
 / `docs/debugging/findings-period2-oscillation.md` for their conclusions
 once written.
+
+## 2026-09-21 — both problems root-caused (both architectural, dilation schedule cleared) and fixed
+
+Two parallel subagent investigations returned:
+
+- **Period-2 oscillation**: confirmed architectural — `correction_head`
+  was the only head with no bounding (unlike `flow_head`'s
+  `tanh*max_flow`). Jacobian probe at a late-rollout operating point
+  measured dominant eigenvalue ≈ -1.15 to -1.2 (magnitude >1, negative
+  sign = textbook period-doubling instability). Ablation (zero or halve
+  `correction`) eliminated the oscillation outright. Findings:
+  `docs/debugging/findings-period2-oscillation.md`.
+- **Gridding/lattice artifact**: leading hypothesis (dilation-schedule
+  gridding, shared factor 2 across `(1,2,4,8,4,2,1)`) was **falsified**
+  — theoretical receptive-field coverage has zero holes and 0.17% parity
+  bias, and the rollout's actual FFT period (13-40px) is far coarser
+  than the 2/4/8px scale a dilation checkerboard would produce. Real
+  cause: the conv stack's implicit zero-padding gives the border ring
+  anomalous flow (2.2x interior magnitude), and
+  `grid_sample(padding_mode="zeros")` turns that into a guaranteed 100%
+  out-of-bounds perimeter every single step (exact match: OOB fraction
+  = 196/2500 perimeter pixels), forcing `correction_head` to
+  reconstruct the whole border from nothing each step. Confirmed
+  causally: swapping to `padding_mode="border"` (no retraining)
+  measurably softens the sharp lattice-line texture. Findings:
+  `docs/debugging/findings-gridding-artifact.md`.
+
+**Fix applied** (`model/net.py`, commit `b05e1a6`): `correction` is now
+`tanh(...) * max_correction` (default 0.2, mirroring the existing
+`max_flow` pattern); `grid_sample` uses `padding_mode="border"`; the
+conv stack (`ResidualConvBlock` + stem + flow/correction heads) uses
+`padding_mode="replicate"` instead of implicit zero-padding.
+`DILATIONS` left unchanged — the evidence didn't support changing it.
+28/28 tests pass (added a bounded-correction test, updated the
+correction-delta test for the new tanh saturation).
+
+Retraining as `stage2_flownet_h12_v2.pt` (job 2823) to let the model
+adapt to the new padding/bounding semantics — not a hyperparameter
+sweep, a required adaptation step since the forward pass itself
+changed. Old checkpoint (`stage2_flownet_h12.pt`) kept for
+before/after comparison. Verification pending — run the standard
+pipeline (`scripts/eval_step1_baseline.py`,
+`scripts/render_diagnostic_grid.py` + unbiased subagent review,
+`scripts/investigate_gridding_artifact.py` for the OOB/FFT metrics,
+and a full per-step stats dump to catch any residual oscillation)
+once job 2823 completes.
