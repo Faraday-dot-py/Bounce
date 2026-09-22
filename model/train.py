@@ -31,7 +31,7 @@ def train(args):
         for g_t, g_t1 in loader:
             g_t, g_t1 = g_t.to(device), g_t1.to(device)
             pred = model(g_t)
-            loss = occupancy_weighted_mse(pred, g_t1, weights, bg_weight=args.bg_weight)
+            loss = occupancy_weighted_mse(pred, g_t1, g_t, weights, bg_weight=args.bg_weight)
             opt.zero_grad()
             loss.backward()
             opt.step()
