@@ -2,25 +2,28 @@ import os
 import random
 import numpy as np
 import bounce
-from model.dataset import generate_pair, make_scenario_uniform
+from model.dataset import generate_sequence, make_scenario_uniform
 
 
-def test_generate_pair_shapes_and_prob_bounds():
+def test_generate_sequence_shapes_and_prob_bounds():
     rng = random.Random(4738)
     balls = make_scenario_uniform(10, 50, 2.3, rng)
-    g_t, g_t1 = generate_pair(balls, 50, 0.15, 9.0, 0.75, 400.0, 8)
-    assert g_t.shape == (50, 50, bounce.NUM_CHANNELS)
-    assert g_t1.shape == (50, 50, bounce.NUM_CHANNELS)
-    assert g_t.dtype == np.float32
-    assert (g_t[:, :, bounce.PROB] >= 0.0).all()
-    assert (g_t[:, :, bounce.PROB] < 1.0).all()
+    frames = generate_sequence(balls, 50, 0.15, 9.0, 0.75, 400.0, 8, horizon=3)
+    assert len(frames) == 4
+    for frame in frames:
+        assert frame.shape == (50, 50, bounce.NUM_CHANNELS)
+        assert frame.dtype == np.float32
+        assert (frame[:, :, bounce.PROB] >= 0.0).all()
+        assert (frame[:, :, bounce.PROB] < 1.0).all()
 
 
-def test_generate_pair_differs_after_one_step():
+def test_generate_sequence_frames_differ_across_steps():
     rng = random.Random(4738)
     balls = make_scenario_uniform(10, 50, 2.3, rng)
-    g_t, g_t1 = generate_pair(balls, 50, 0.15, 9.0, 0.75, 400.0, 8)
-    assert not np.allclose(g_t, g_t1)
+    frames = generate_sequence(balls, 50, 0.15, 9.0, 0.75, 400.0, 8, horizon=3)
+    assert not np.allclose(frames[0], frames[1])
+    assert not np.allclose(frames[1], frames[2])
+    assert not np.allclose(frames[2], frames[3])
 
 
 from model.dataset import make_scenario_clustered, make_scenario_settled
@@ -49,39 +52,35 @@ def test_settled_scenario_balls_move_toward_high_x_under_gravity():
 
 
 import torch
-from model.dataset import BouncePairDataset
+from model.dataset import BounceSequenceDataset
 
 
-def test_bounce_pair_dataset_shapes_and_determinism():
-    ds1 = BouncePairDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738)
-    ds2 = BouncePairDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738)
+def test_bounce_sequence_dataset_shapes_and_determinism():
+    ds1 = BounceSequenceDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738, horizon=3)
+    ds2 = BounceSequenceDataset(num_samples=6, n=50, ball_range=(5, 15), seed=4738, horizon=3)
     assert len(ds1) == 6
-    g_t, g_t1 = ds1[0]
-    assert g_t.shape == (3, 50, 50)
-    assert g_t1.shape == (3, 50, 50)
-    assert isinstance(g_t, torch.Tensor)
-    g_t_again, _ = ds2[0]
-    assert torch.equal(g_t, g_t_again)
+    seq = ds1[0]
+    assert seq.shape == (4, 3, 50, 50)
+    assert isinstance(seq, torch.Tensor)
+    seq_again = ds2[0]
+    assert torch.equal(seq, seq_again)
 
 
-def test_bounce_pair_dataset_cache_roundtrip(tmp_path):
+def test_bounce_sequence_dataset_cache_roundtrip(tmp_path):
     cache_path = str(tmp_path / "cache.npz")
-    ds1 = BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    ds1 = BounceSequenceDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, horizon=3, cache_path=cache_path)
     assert os.path.exists(cache_path)
-    ds2 = BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    ds2 = BounceSequenceDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, horizon=3, cache_path=cache_path)
     assert len(ds2) == len(ds1)
     for i in range(len(ds1)):
-        g_t1, g_t1_next = ds1[i]
-        g_t2, g_t2_next = ds2[i]
-        assert torch.equal(g_t1, g_t2)
-        assert torch.equal(g_t1_next, g_t2_next)
+        assert torch.equal(ds1[i], ds2[i])
 
 
-def test_bounce_pair_dataset_cache_rejects_mismatched_config(tmp_path):
+def test_bounce_sequence_dataset_cache_rejects_mismatched_config(tmp_path):
     cache_path = str(tmp_path / "cache.npz")
-    BouncePairDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, cache_path=cache_path)
+    BounceSequenceDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, horizon=3, cache_path=cache_path)
     try:
-        BouncePairDataset(num_samples=4, n=50, ball_range=(5, 20), seed=4738, cache_path=cache_path)
+        BounceSequenceDataset(num_samples=4, n=50, ball_range=(5, 15), seed=4738, horizon=2, cache_path=cache_path)
         assert False, "expected ValueError for mismatched cache config"
     except ValueError:
         pass

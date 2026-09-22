@@ -11,13 +11,14 @@ def make_scenario_uniform(num_balls, n, vy, rng):
     return bounce.init_balls(num_balls, n, vy, rng)
 
 
-def generate_pair(balls, n, dt, gravity, radius, stiffness, substeps):
+def generate_sequence(balls, n, dt, gravity, radius, stiffness, substeps, horizon):
     G = bounce.make_grid(n)
     bounce.splat_all(G, n, balls, radius)
-    g_t = np.array(G, dtype=np.float32)
-    bounce.step(G, n, balls, dt, gravity, radius, stiffness, substeps)
-    g_t1 = np.array(G, dtype=np.float32)
-    return g_t, g_t1
+    frames = [np.array(G, dtype=np.float32)]
+    for _ in range(horizon):
+        bounce.step(G, n, balls, dt, gravity, radius, stiffness, substeps)
+        frames.append(np.array(G, dtype=np.float32))
+    return frames
 
 
 def make_scenario_clustered(num_balls, n, vy, rng, cluster_radius):
@@ -42,14 +43,15 @@ def make_scenario_settled(num_balls, n, vy, rng, radius, gravity, stiffness, dt,
     return balls
 
 
-class BouncePairDataset(Dataset):
+class BounceSequenceDataset(Dataset):
     SCENARIOS = ("uniform", "clustered", "settled")
 
-    def __init__(self, num_samples, n, ball_range, seed, dt=0.15, gravity=9.0,
+    def __init__(self, num_samples, n, ball_range, seed, horizon=3, dt=0.15, gravity=9.0,
                  radius=0.75, stiffness=400.0, substeps=8, vy=2.3,
                  cluster_radius=3.0, settle_steps=200, cache_path=None):
         config = {
-            "num_samples": num_samples, "n": n, "ball_range": tuple(ball_range), "seed": seed,
+            "num_samples": num_samples, "n": n, "ball_range": tuple(ball_range),
+            "seed": seed, "horizon": horizon,
         }
         if cache_path is not None and os.path.exists(cache_path):
             self.samples = self._load_cache(cache_path, config)
@@ -71,8 +73,8 @@ class BouncePairDataset(Dataset):
                     num_balls, n, vy, rng, radius, gravity, stiffness, dt,
                     substeps, settle_steps,
                 )
-            g_t, g_t1 = generate_pair(balls, n, dt, gravity, radius, stiffness, substeps)
-            self.samples.append((g_t, g_t1))
+            frames = generate_sequence(balls, n, dt, gravity, radius, stiffness, substeps, horizon)
+            self.samples.append(np.stack(frames))
             if (i + 1) % 100 == 0 or (i + 1) == num_samples:
                 elapsed = time.time() - t_start
                 print(f"[dataset] generated {i + 1}/{num_samples} samples ({elapsed:.1f}s elapsed)", flush=True)
@@ -82,12 +84,12 @@ class BouncePairDataset(Dataset):
             print(f"[dataset] saved {len(self.samples)} samples to {cache_path}", flush=True)
 
     def _save_cache(self, cache_path, config):
-        g_t_arr = np.stack([s[0] for s in self.samples])
-        g_t1_arr = np.stack([s[1] for s in self.samples])
+        seq_arr = np.stack(self.samples)
         np.savez(
-            cache_path, g_t=g_t_arr, g_t1=g_t1_arr,
+            cache_path, sequences=seq_arr,
             num_samples=config["num_samples"], n=config["n"],
             ball_range=np.array(config["ball_range"]), seed=config["seed"],
+            horizon=config["horizon"],
         )
 
     @staticmethod
@@ -96,20 +98,19 @@ class BouncePairDataset(Dataset):
         cached_config = {
             "num_samples": int(data["num_samples"]), "n": int(data["n"]),
             "ball_range": tuple(int(x) for x in data["ball_range"]), "seed": int(data["seed"]),
+            "horizon": int(data["horizon"]),
         }
         if cached_config != config:
             raise ValueError(
                 f"dataset cache at {cache_path} was generated with config {cached_config}, "
                 f"but this run requested {config}. Delete the cache or use a different --cache-path."
             )
-        g_t_arr, g_t1_arr = data["g_t"], data["g_t1"]
-        return [(g_t_arr[i], g_t1_arr[i]) for i in range(g_t_arr.shape[0])]
+        seq_arr = data["sequences"]
+        return [seq_arr[i] for i in range(seq_arr.shape[0])]
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        g_t, g_t1 = self.samples[idx]
-        g_t = torch.from_numpy(g_t.transpose(2, 0, 1)).clone()
-        g_t1 = torch.from_numpy(g_t1.transpose(2, 0, 1)).clone()
-        return g_t, g_t1
+        seq = self.samples[idx]
+        return torch.from_numpy(seq.transpose(0, 3, 1, 2)).clone()

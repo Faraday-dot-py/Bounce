@@ -3,7 +3,7 @@ import random
 import torch
 
 import bounce
-from model.dataset import make_scenario_uniform, generate_pair
+from model.dataset import make_scenario_uniform, generate_sequence
 from model.losses import weighted_channel_mse
 
 
@@ -23,7 +23,8 @@ def held_out_loss(model, n, ball_range, num_samples, seed, weights,
         for _ in range(num_samples):
             num_balls = rng.randint(*ball_range)
             balls = make_scenario_uniform(num_balls, n, vy, rng)
-            g_t, g_t1 = generate_pair(balls, n, dt, gravity, radius, stiffness, substeps)
+            frames = generate_sequence(balls, n, dt, gravity, radius, stiffness, substeps, horizon=1)
+            g_t, g_t1 = frames[0], frames[1]
             g_t, g_t1 = _pair_to_batch(g_t, g_t1, device)
             pred = model(g_t)
             total += weighted_channel_mse(pred, g_t1, weights.to(device)).item()
