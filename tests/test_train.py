@@ -23,7 +23,7 @@ def test_rollout_loss_overfits_a_single_batch():
     loader = DataLoader(dataset, batch_size=4, shuffle=False)
     sequence = next(iter(loader))
 
-    model = BounceNextFrameModel(embed_dim=16, depth=2, num_heads=4, window_size=8)
+    model = BounceNextFrameModel(channels=16, depth=2)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     weights = torch.tensor([1.0, 0.1, 0.1])
 
@@ -50,7 +50,7 @@ def test_rollout_loss_self_feeds_when_sampling_p_is_one():
     dataset = BounceSequenceDataset(num_samples=2, n=20, ball_range=(3, 6), seed=4738, horizon=3)
     loader = DataLoader(dataset, batch_size=2, shuffle=False)
     sequence = next(iter(loader))
-    model = BounceNextFrameModel(embed_dim=16, depth=2, num_heads=4, window_size=8)
+    model = BounceNextFrameModel(channels=16, depth=2)
     weights = torch.tensor([1.0, 0.1, 0.1])
 
     # sampling_p=1.0 must run without error even though the model's own
@@ -68,7 +68,7 @@ def test_rollout_loss_self_feed_decided_per_step_not_per_rollout():
     dataset = BounceSequenceDataset(num_samples=2, n=20, ball_range=(3, 6), seed=4738, horizon=3)
     loader = DataLoader(dataset, batch_size=2, shuffle=False)
     sequence = next(iter(loader))
-    model = BounceNextFrameModel(embed_dim=16, depth=2, num_heads=4, window_size=8)
+    model = BounceNextFrameModel(channels=16, depth=2)
     weights = torch.tensor([1.0, 0.1, 0.1])
 
     # random() sequence -> self_feed per step: False (0.9>=0.5), True (0.1<0.5), unused

@@ -44,8 +44,7 @@ def train(args):
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     model = BounceNextFrameModel(
-        embed_dim=args.embed_dim, depth=args.depth, num_heads=args.num_heads,
-        window_size=args.window_size,
+        channels=args.channels, depth=args.depth, max_flow=args.max_flow,
     ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor(args.channel_weights, device=device)
@@ -76,10 +75,9 @@ def build_arg_parser():
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=4738)
-    ap.add_argument("--embed-dim", type=int, default=128)
-    ap.add_argument("--depth", type=int, default=6)
-    ap.add_argument("--num-heads", type=int, default=4)
-    ap.add_argument("--window-size", type=int, default=8)
+    ap.add_argument("--channels", type=int, default=64)
+    ap.add_argument("--depth", type=int, default=7)
+    ap.add_argument("--max-flow", type=float, default=4.0)
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--horizon", type=int, default=3)

@@ -48,7 +48,7 @@ if __name__ == "__main__":
     checkpoints = parse_checkpoints(args.checkpoints)
     models = {}
     for name, path in checkpoints.items():
-        model = BounceNextFrameModel(embed_dim=128, depth=6, num_heads=4, window_size=8, randomize_offset=False)
+        model = BounceNextFrameModel(channels=64, depth=7)
         model.load_state_dict(torch.load(path, map_location="cpu"), strict=False)
         model.eval()
         models[name] = model

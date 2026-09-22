@@ -5,7 +5,7 @@ from model.evaluate import rollout_divergence
 
 
 def load_model(checkpoint_path):
-    model = BounceNextFrameModel(embed_dim=128, depth=6, num_heads=4, window_size=8)
+    model = BounceNextFrameModel(channels=64, depth=7)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
