@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=bounce-stage2-flownet
+#SBATCH --job-name=bounce-stage2-flownet-v2
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --time=02:30:00
-#SBATCH --output=bounce-stage2-flownet-%j.log
+#SBATCH --output=bounce-stage2-flownet-v2-%j.log
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -24,6 +24,6 @@ python -m model.train \
   --channels 64 --depth 7 --max-flow 4.0 \
   --horizon 12 \
   --seed 4738 \
-  --checkpoint checkpoints/stage2_flownet_h12.pt \
+  --checkpoint checkpoints/stage2_flownet_h12_v2.pt \
   --cache-path checkpoints/dataset_cache_seq_h12.npz
 echo "[$(date -Iseconds)] training done"
