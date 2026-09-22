@@ -34,7 +34,7 @@ either token is padding).
 
 `SwinBlock.forward` always computes this validity mask when `Hp != orig_H or
 Wp != orig_W` (regardless of `shift_size`), and combines it with the shift
-mask (when present) via elementwise `torch.maximum` (more negative wins —
+mask (when present) via elementwise `torch.minimum` (more negative wins —
 either condition is enough to suppress attention). When there's no padding
 and no shift, `mask` stays `None` as today.
 

@@ -14,12 +14,18 @@ class PatchEmbed(nn.Module):
         return x
 
 
-def icnr_init(weight, patch_size, out_channels):
+def icnr_init(weight, patch_size, out_channels, bias=None):
     group_size = patch_size * patch_size
-    out_features, in_features = weight.shape
+    _, in_features = weight.shape
     sub_weight = torch.empty(out_channels, in_features, device=weight.device, dtype=weight.dtype)
     nn.init.kaiming_uniform_(sub_weight, a=5 ** 0.5)
     weight.data.copy_(sub_weight.repeat(group_size, 1))
+    if bias is not None:
+        sub_bias = torch.empty(out_channels, device=bias.device, dtype=bias.dtype)
+        fan_in = in_features
+        bound = 1 / fan_in ** 0.5
+        nn.init.uniform_(sub_bias, -bound, bound)
+        bias.data.copy_(sub_bias.repeat(group_size))
 
 
 class Unpatchify(nn.Module):
@@ -28,7 +34,7 @@ class Unpatchify(nn.Module):
         self.patch_size = patch_size
         self.out_channels = out_channels
         self.proj = nn.Linear(embed_dim, patch_size * patch_size * out_channels)
-        icnr_init(self.proj.weight, patch_size, out_channels)
+        icnr_init(self.proj.weight, patch_size, out_channels, bias=self.proj.bias)
 
     def forward(self, x):
         B, H, W, _ = x.shape

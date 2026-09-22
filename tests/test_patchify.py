@@ -35,6 +35,12 @@ def test_icnr_init_sub_pixel_positions_start_equal():
         for g in range(1, group_size):
             assert torch.allclose(w_grouped[0, c], w_grouped[g, c])
 
+    b = unpatch.proj.bias.data  # (12,)
+    b_grouped = b.view(group_size, out_channels)
+    for c in range(out_channels):
+        for g in range(1, group_size):
+            assert torch.allclose(b_grouped[0, c], b_grouped[g, c])
+
 
 def test_icnr_init_diverges_after_optimizer_step():
     torch.manual_seed(4738)

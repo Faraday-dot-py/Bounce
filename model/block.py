@@ -32,7 +32,7 @@ class SwinBlock(nn.Module):
                 validity_mask = compute_validity_mask(
                     Hp, Wp, orig_H, orig_W, self.window_size, x.device, roll_shift=self.shift_size,
                 )
-                mask = torch.maximum(mask, validity_mask)
+                mask = torch.minimum(mask, validity_mask)
         else:
             mask = None
             if has_padding:

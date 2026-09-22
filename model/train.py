@@ -32,6 +32,7 @@ def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight):
 
 def train(args):
     torch.manual_seed(args.seed)
+    random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataset = BounceSequenceDataset(
         num_samples=args.num_samples,
