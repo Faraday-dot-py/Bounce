@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 
 def weighted_channel_mse(pred, target, weights):
@@ -6,7 +7,23 @@ def weighted_channel_mse(pred, target, weights):
     return (per_channel * weights).sum()
 
 
-def occupancy_weighted_mse(pred, target, source, weights, bg_weight=0.05, peak_weight=0.1):
+def _tile_mass_loss(pred_prob, target_prob, tile):
+    # Zero-pad to a multiple of `tile` (rather than relying on
+    # avg_pool2d's ceil_mode, whose partial-window divisor would
+    # otherwise overcount a boundary tile's recovered sum) so every
+    # tile's mass is computed over an honest tile*tile denominator.
+    h, w = pred_prob.shape[-2:]
+    pad_h = (tile - h % tile) % tile
+    pad_w = (tile - w % tile) % tile
+    pred_padded = F.pad(pred_prob, (0, pad_w, 0, pad_h))
+    target_padded = F.pad(target_prob, (0, pad_w, 0, pad_h))
+    pred_mass = F.avg_pool2d(pred_padded, kernel_size=tile, stride=tile) * (tile * tile)
+    target_mass = F.avg_pool2d(target_padded, kernel_size=tile, stride=tile) * (tile * tile)
+    return ((pred_mass - target_mass) ** 2).mean()
+
+
+def occupancy_weighted_mse(pred, target, source, weights, bg_weight=0.05, peak_weight=0.1,
+                            mass_weight=0.0, mass_tile=16):
     target_occ = target[:, 0:1, :, :] > 1e-6
     source_occ = source[:, 0:1, :, :] > 1e-6
     occ = (target_occ | source_occ).float()
@@ -43,4 +60,19 @@ def occupancy_weighted_mse(pred, target, source, weights, bg_weight=0.05, peak_w
     target_peak = target[:, 0:1].amax(dim=(2, 3))
     peak_loss = ((pred_peak - target_peak) ** 2).mean()
 
-    return (per_channel * weights).sum() + peak_weight * peak_loss
+    # The peak term above closes off "blur everywhere" as a cheap hedge,
+    # but exposes a second one: once a ball's predicted position has
+    # drifted, giving up on it entirely is cheaper than committing to any
+    # specific nearby position (a confident-but-wrong prediction is
+    # double-penalized: false-positive + missed-cell, vs. give-up's single
+    # missed-cell cost). A per-cell max-based regional peak check doesn't
+    # fix this either -- a confidently-correct neighboring ball can mask a
+    # give-up ball sharing its region, and the masking gets worse exactly
+    # as density rises. A per-tile *summed* mass term doesn't have this
+    # failure mode: a tile's total mass is directly short by a missing
+    # ball's mass regardless of what else is in the tile, so a
+    # confidently-correct neighbor can't cancel out a give-up ball's
+    # absence. See docs/debugging/findings-mass-conservation-loss.md.
+    mass_loss = _tile_mass_loss(pred[:, 0:1, :, :], target[:, 0:1, :, :], mass_tile)
+
+    return (per_channel * weights).sum() + peak_weight * peak_loss + mass_weight * mass_loss

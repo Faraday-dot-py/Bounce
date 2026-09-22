@@ -146,3 +146,89 @@ def test_peak_term_prefers_sharp_shifted_over_diffuse_centered():
     loss_diffuse_with_peak = occupancy_weighted_mse(pred_diffuse, target, source, weights, peak_weight=0.1)
     loss_sharp_with_peak = occupancy_weighted_mse(pred_sharp_shifted, target, source, weights, peak_weight=0.1)
     assert loss_sharp_with_peak < loss_diffuse_with_peak  # the fix reverses the preference
+
+
+def test_mass_term_prefers_commit_over_giveup_in_dense_high_drift_tile():
+    # Regression test for docs/debugging/findings-mass-conservation-loss.md:
+    # a per-tile summed-mass term should favor committing to a drifted-but-
+    # present position over giving up entirely, even in the dense/
+    # high-drift regime that defeated every peak-based regional
+    # formulation tested there (a shared max lets a confidently-correct
+    # neighbor mask a give-up ball's missing mass; a shared sum can't,
+    # since the tile total is directly short by the missing mass either
+    # way).
+    n = 32
+    weights = torch.tensor([1.0, 0.0, 0.0])
+
+    def disk(cx, cy, radius=0.75):
+        ii, jj = torch.meshgrid(torch.arange(n).float(), torch.arange(n).float(), indexing="ij")
+        d = torch.hypot(ii - cx, jj - cy)
+        w = torch.where(d <= radius, 1.0 - d / radius, torch.zeros_like(d))
+        return 1.0 - torch.exp(-w)
+
+    # 8 "certain" balls crowded into one 16x16 tile (rows/cols 0-15),
+    # simulating high local density; correctly predicted in both candidates.
+    certain_centers = [(2, 2), (4, 10), (8, 4), (10, 12), (3, 14), (12, 2), (6, 8), (14, 6)]
+    # One "uncertain" ball, also in that tile, true position (7, 7).
+    uncertain_true = (7.0, 7.0)
+    drift = 8.0  # large drift, still inside the same tile
+
+    target = torch.zeros(1, 3, n, n)
+    for cx, cy in certain_centers:
+        target[0, 0] += disk(cx, cy)
+    target[0, 0] += disk(*uncertain_true)
+    source = target.clone()
+
+    give_up = torch.zeros(1, 3, n, n)
+    for cx, cy in certain_centers:
+        give_up[0, 0] += disk(cx, cy)
+    # uncertain ball omitted entirely
+
+    commit = give_up.clone()
+    commit[0, 0] += disk(uncertain_true[0] + drift, uncertain_true[1])
+
+    loss_giveup_no_mass = occupancy_weighted_mse(
+        give_up, target, source, weights, peak_weight=0.0, mass_weight=0.0)
+    loss_commit_no_mass = occupancy_weighted_mse(
+        commit, target, source, weights, peak_weight=0.0, mass_weight=0.0)
+    assert loss_giveup_no_mass < loss_commit_no_mass  # confirms the bug exists without the fix
+
+    loss_giveup_with_mass = occupancy_weighted_mse(
+        give_up, target, source, weights, peak_weight=0.0, mass_weight=0.1, mass_tile=16)
+    loss_commit_with_mass = occupancy_weighted_mse(
+        commit, target, source, weights, peak_weight=0.0, mass_weight=0.1, mass_tile=16)
+    assert loss_commit_with_mass < loss_giveup_with_mass  # the fix reverses the preference
+
+
+def test_mass_term_zero_when_tile_mass_matches():
+    n = 32
+    weights = torch.tensor([1.0, 0.0, 0.0])
+    target = torch.zeros(1, 3, n, n)
+    target[:, 0, 5, 5] = 1.0
+    source = target.clone()
+    # Prediction spreads the same total tile mass to a different pixel
+    # within the same tile -- tile-level mass matches exactly, so the
+    # mass term alone should contribute nothing even though pred != target.
+    pred = torch.zeros(1, 3, n, n)
+    pred[:, 0, 6, 6] = 1.0
+
+    loss_mass_only = occupancy_weighted_mse(
+        pred, target, source, weights, bg_weight=0.0, peak_weight=0.0, mass_weight=1.0, mass_tile=16)
+    loss_no_mass = occupancy_weighted_mse(
+        pred, target, source, weights, bg_weight=0.0, peak_weight=0.0, mass_weight=0.0)
+    assert torch.isclose(loss_mass_only, loss_no_mass, atol=1e-6)
+
+
+def test_mass_term_handles_grid_not_divisible_by_tile_size():
+    # n=50 with mass_tile=16 doesn't divide evenly (production grid size) --
+    # confirm this doesn't error and doesn't spuriously penalize a correct
+    # prediction because of the partial boundary tile.
+    n = 50
+    weights = torch.tensor([1.0, 0.0, 0.0])
+    pred = torch.zeros(1, 3, n, n)
+    pred[:, 0, 48, 48] = 1.0  # inside the partial boundary tile
+    target = pred.clone()
+    source = pred.clone()
+    loss = occupancy_weighted_mse(
+        pred, target, source, weights, bg_weight=0.0, peak_weight=0.0, mass_weight=1.0, mass_tile=16)
+    assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6)

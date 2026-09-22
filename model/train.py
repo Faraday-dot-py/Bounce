@@ -15,7 +15,8 @@ def sampling_probability(epoch, ramp_epochs):
     return min(1.0, epoch / ramp_epochs)
 
 
-def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight, peak_weight=0.1):
+def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight, peak_weight=0.1,
+                  mass_weight=0.0, mass_tile=16):
     device = next(model.parameters()).device
     sequence = sequence.to(device)
     weights = weights.to(device)
@@ -24,7 +25,9 @@ def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight, peak_
     for k in range(1, horizon + 1):
         target = sequence[:, k]
         pred = model(frame)
-        total = total + occupancy_weighted_mse(pred, target, frame, weights, bg_weight=bg_weight, peak_weight=peak_weight)
+        total = total + occupancy_weighted_mse(
+            pred, target, frame, weights, bg_weight=bg_weight, peak_weight=peak_weight,
+            mass_weight=mass_weight, mass_tile=mass_tile)
         self_feed = random.random() < sampling_p
         frame = pred.detach() if self_feed else target
     return total / horizon
@@ -54,7 +57,8 @@ def train(args):
         p = sampling_probability(epoch, ramp_epochs)
         total_loss = 0.0
         for sequence in loader:
-            loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight, args.peak_weight)
+            loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight, args.peak_weight,
+                                 args.mass_weight, args.mass_tile)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -81,6 +85,8 @@ def build_arg_parser():
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
+    ap.add_argument("--mass-weight", type=float, default=0.1)
+    ap.add_argument("--mass-tile", type=int, default=16)
     ap.add_argument("--horizon", type=int, default=3)
     ap.add_argument("--sampling-ramp-epochs", type=int, default=None)
     ap.add_argument("--checkpoint", type=str, default="checkpoint.pt")
