@@ -15,7 +15,7 @@ def sampling_probability(epoch, ramp_epochs):
     return min(1.0, epoch / ramp_epochs)
 
 
-def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight):
+def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight, peak_weight=0.1):
     device = next(model.parameters()).device
     sequence = sequence.to(device)
     weights = weights.to(device)
@@ -24,7 +24,7 @@ def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight):
     for k in range(1, horizon + 1):
         target = sequence[:, k]
         pred = model(frame)
-        total = total + occupancy_weighted_mse(pred, target, frame, weights, bg_weight=bg_weight)
+        total = total + occupancy_weighted_mse(pred, target, frame, weights, bg_weight=bg_weight, peak_weight=peak_weight)
         self_feed = random.random() < sampling_p
         frame = pred.detach() if self_feed else target
     return total / horizon
@@ -54,7 +54,7 @@ def train(args):
         p = sampling_probability(epoch, ramp_epochs)
         total_loss = 0.0
         for sequence in loader:
-            loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight)
+            loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight, args.peak_weight)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -80,6 +80,7 @@ def build_arg_parser():
     ap.add_argument("--max-flow", type=float, default=4.0)
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
     ap.add_argument("--bg-weight", type=float, default=0.05)
+    ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--horizon", type=int, default=3)
     ap.add_argument("--sampling-ramp-epochs", type=int, default=None)
     ap.add_argument("--checkpoint", type=str, default="checkpoint.pt")

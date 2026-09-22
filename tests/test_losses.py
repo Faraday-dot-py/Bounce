@@ -29,12 +29,12 @@ def test_bg_weight_zero_ignores_background_error():
 
     pred_bg_err = target.clone()
     pred_bg_err[:, 0, 0, 0] = 5.0  # error only in a background pixel
-    loss_bg = occupancy_weighted_mse(pred_bg_err, target, source, weights, bg_weight=0.0)
+    loss_bg = occupancy_weighted_mse(pred_bg_err, target, source, weights, bg_weight=0.0, peak_weight=0.0)
     assert torch.isclose(loss_bg, torch.tensor(0.0), atol=1e-6)
 
     pred_occ_err = target.clone()
     pred_occ_err[:, 0, 5, 5] = 5.0  # error only at the occupied pixel
-    loss_occ = occupancy_weighted_mse(pred_occ_err, target, source, weights, bg_weight=0.0)
+    loss_occ = occupancy_weighted_mse(pred_occ_err, target, source, weights, bg_weight=0.0, peak_weight=0.0)
     assert loss_occ > 0.0
 
 
@@ -46,7 +46,7 @@ def test_bg_weight_only_discounts_prob_channel():
     pred_vel_err = target.clone()
     pred_vel_err[:, 1, 0, 0] = 5.0  # VX error at a background pixel
     weights = torch.tensor([0.0, 1.0, 0.0])
-    loss_vel_bg = occupancy_weighted_mse(pred_vel_err, target, source, weights, bg_weight=0.05)
+    loss_vel_bg = occupancy_weighted_mse(pred_vel_err, target, source, weights, bg_weight=0.05, peak_weight=0.0)
     loss_vel_uniform = weighted_channel_mse(pred_vel_err, target, weights)
     assert torch.isclose(loss_vel_bg, loss_vel_uniform)
 
@@ -56,7 +56,7 @@ def test_bg_weight_one_matches_weighted_channel_mse():
     target = torch.randn(2, 3, 10, 10)
     source = torch.randn(2, 3, 10, 10)
     weights = torch.tensor([1.0, 0.1, 0.1])
-    loss_occ = occupancy_weighted_mse(pred, target, source, weights, bg_weight=1.0)
+    loss_occ = occupancy_weighted_mse(pred, target, source, weights, bg_weight=1.0, peak_weight=0.0)
     loss_uniform = weighted_channel_mse(pred, target, weights)
     assert torch.isclose(loss_occ, loss_uniform)
 
@@ -105,7 +105,44 @@ def test_vacated_cell_keeps_full_weight_via_source_occupancy():
     pred_wrong = target.clone()
     pred_wrong[:, 0, 5, 5] = 5.0  # incorrectly predicts mass stayed
 
-    loss_correct = occupancy_weighted_mse(pred_correct, target, source, weights, bg_weight=0.0)
-    loss_wrong = occupancy_weighted_mse(pred_wrong, target, source, weights, bg_weight=0.0)
+    loss_correct = occupancy_weighted_mse(pred_correct, target, source, weights, bg_weight=0.0, peak_weight=0.0)
+    loss_wrong = occupancy_weighted_mse(pred_wrong, target, source, weights, bg_weight=0.0, peak_weight=0.0)
     assert torch.isclose(loss_correct, torch.tensor(0.0), atol=1e-6)
     assert loss_wrong > 0.0
+
+
+def test_peak_term_prefers_sharp_shifted_over_diffuse_centered():
+    # Regression test for the root-cause fix in
+    # docs/debugging/findings-peak-decay-dissolution.md: per-pixel
+    # occupancy-weighted MSE alone (peak_weight=0) prefers a diffuse,
+    # mass-matched blob over a sharp-but-slightly-mispositioned ball once
+    # position uncertainty exceeds about one ball radius -- confirmed
+    # directly below -- which the peak term must reverse.
+    n = 20
+    weights = torch.tensor([1.0, 0.0, 0.0])
+
+    def disk(cx, cy, radius):
+        ii, jj = torch.meshgrid(torch.arange(n).float(), torch.arange(n).float(), indexing="ij")
+        d = torch.hypot(ii - cx, jj - cy)
+        w = torch.where(d <= radius, 1.0 - d / radius, torch.zeros_like(d))
+        return 1.0 - torch.exp(-w)
+
+    target = torch.zeros(1, 3, n, n)
+    target[0, 0] = disk(10, 10, 0.75)
+    source = target.clone()
+
+    diffuse = disk(10, 10, 6.0)
+    diffuse = diffuse * (target[0, 0].sum() / diffuse.sum())
+    pred_diffuse = torch.zeros(1, 3, n, n)
+    pred_diffuse[0, 0] = diffuse
+
+    pred_sharp_shifted = torch.zeros(1, 3, n, n)
+    pred_sharp_shifted[0, 0] = disk(12, 10, 0.75)
+
+    loss_diffuse_no_peak = occupancy_weighted_mse(pred_diffuse, target, source, weights, peak_weight=0.0)
+    loss_sharp_no_peak = occupancy_weighted_mse(pred_sharp_shifted, target, source, weights, peak_weight=0.0)
+    assert loss_diffuse_no_peak < loss_sharp_no_peak  # confirms the bug exists without the fix
+
+    loss_diffuse_with_peak = occupancy_weighted_mse(pred_diffuse, target, source, weights, peak_weight=0.1)
+    loss_sharp_with_peak = occupancy_weighted_mse(pred_sharp_shifted, target, source, weights, peak_weight=0.1)
+    assert loss_sharp_with_peak < loss_diffuse_with_peak  # the fix reverses the preference
