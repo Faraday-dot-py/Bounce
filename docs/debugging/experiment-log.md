@@ -365,3 +365,48 @@ architectural fixes now landed and verified working as designed
 resampling, PROB mass renormalization) — the drift/oscillation family
 of bugs is resolved. This new blocky-tiling artifact is a distinct,
 open problem, not yet investigated.
+
+## 2026-09-22 — quilting artifact root-caused: renorm amplifying diffusion noise, not a new bug
+
+Dispatched a subagent to root-cause the blocky/tiled artifact (visual
+review confirmed onset ~step 8-12, ~5-6px axis-aligned tiles on the
+50x50 grid). All plausible new-bug candidates were ruled out with
+direct evidence: OOB fraction, flow saturation, GroupNorm spatial
+behavior, renorm-scale magnitude, NaN/Inf, and a plotting artifact were
+each checked and cleared; a Jacobian-fold "basin of attraction" probe
+found ~0 correlation with the blocky regions.
+
+**Real mechanism**: not a new bug — the already-documented bicubic
+resampling diffusion (`findings-correction-drift-and-mass-dissolution.md`
+Part 2) spreads PROB mass into near-zero background across ~90% of the
+grid by step 8 regardless of renorm (confirmed against ground truth,
+which stays ~10% nonzero). Pre-v4 this diffusion just looked like decay
+(`max0` dropping). v4's exact mass renormalization (needed for the
+VX/VY drift fix) has no way to distinguish that diffused background
+noise from real occupancy, so it perpetually rescales the noise back up
+to the true total mass every step, turning the model's own smooth
+low-frequency residual structure into a persistent, growing mosaic —
+same underlying diffusion bug, newly surfaced by the renorm fix
+interacting with it, not a fourth independent architectural flaw.
+
+**Fix applied** (`model/net.py`, commit `787393b`): soft-threshold PROB
+(`relu(prob - prob_threshold)`, `prob_threshold=0.015`) before computing
+the renorm sum and before scaling, so sub-threshold diffusion noise is
+zeroed instead of amplified. Frozen-weight counterfactual on v4 cuts
+nonzero-area fraction from ~0.85-0.93 down to ~0.55-0.70 by step 8-10
+(direct evidence the mechanism is real and the fix engages it) but
+still shows visible blockiness at frozen weights, since v4's weights
+were trained under the pre-threshold forward pass and the low-frequency
+structure they emit wasn't shaped with this transform in the loop.
+Test suite updated: the "exact identity at init" test now checks VX/VY
+channels exactly and PROB via background-stays-zero + mass-conservation
+(soft-threshold is a deliberate shrink-and-rescale, not an identity map,
+for the PROB channel specifically); the correction-bounds test now
+scopes its magnitude/mean assertions to VX/VY, since PROB's final value
+passes through the threshold+renorm transform afterward. 29/29 tests
+pass. Findings: `docs/debugging/findings-quilting-artifact.md`.
+
+Retraining as `stage2_flownet_h12_v5.pt` (job 2826) to let the model
+adapt to the new forward pass — required adaptation, not a
+hyperparameter sweep, same as every other forward-pass change this
+session. Verification pending.
