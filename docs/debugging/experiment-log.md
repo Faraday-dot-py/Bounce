@@ -463,3 +463,53 @@ fixes together. Verification pending — standard pipeline plus the
 same 30-step per-channel stats dump used to catch this regression,
 since the diagnostic grid + MSE checks alone did not surface it (only
 the full stats dump comparing v4 vs v5 side by side did).
+
+## 2026-09-22 — v6 verified: quilting and VX/VY drift both resolved, no regressions; adopted as current default
+
+`stage2_flownet_h12_v6` (job 2828) verified via the full pipeline
+(step-1 MSE, 30-step per-channel stats dump, diagnostic grid + unbiased
+subagent visual review):
+
+- Step-1: **0.71x** MSE-vs-copy-baseline (v5 was 0.68x, v4 0.84x) — no
+  regression, still the best or near-best of any checkpoint this
+  session.
+- **VX/VY drift fully fixed and stable across an actual retrain (not
+  just the frozen-weight counterfactual)**: `mean1`/`mean2` are pinned
+  exactly at their initial values (+0.0162 / -0.0098) at *every* step
+  0-30, confirming the recentering fix generalizes through training,
+  not just as a frozen-weight patch.
+- **Quilting artifact confirmed still absent**: unbiased subagent
+  review of a v5-vs-v6 side-by-side diagnostic grid found no
+  checkerboard/stripe/rectangular-tile pattern in either row.
+- One new, minor, distinct texture difference noted by the same
+  review: v6's bright/dark rollout boundary is more jagged/
+  saw-toothed than v5's smoother one, and v6 reaches its final
+  near-uniform state a few steps faster. Not a periodic tiling
+  artifact (explicitly ruled out by the reviewer) and not a regression
+  of anything previously fixed — most likely a downstream texture
+  consequence of the VX/VY-pinning fix interacting with the
+  already-documented residual bicubic-diffusion/peak-decay issue from
+  `findings-correction-drift-and-mass-dissolution.md` (both v5 and v6
+  ultimately collapse toward a similar bright-bottom/dark-top band at
+  late steps) rather than a new bug. Flagged, not yet investigated
+  further — the diffusion/peak-decay issue was already a known,
+  documented, lower-priority open item before tonight's quilting work
+  started.
+
+**Conclusion**: the quilting bug reported at the top of this log is
+resolved, with its one second-order side effect (the VX/VY drift
+regression it exposed) also resolved, verified through an actual
+end-to-end retrain with no MSE, oscillation, or gridding-lattice
+regressions. `stage2_flownet_h12_v6.pt` is adopted as the current
+default checkpoint going forward. `model/net.py`'s docstring documents
+all six architectural fixes landed this session (windowed-attention
+replacement, bounded+centered correction, border/replicate padding,
+bicubic resampling, PROB mass renorm + soft-threshold, VX/VY mean
+recentering).
+
+The remaining known, lower-priority open item is the residual
+peak-intensity decay / bicubic diffusion (`max0` dropping over a
+rollout, `findings-correction-drift-and-mass-dissolution.md` Part 2) —
+already documented, not a new regression, candidate fixes (nearest-
+neighbor resampling under the model's real predicted flow, or a
+training-time sharpness/peakiness regularizer) not yet tried.
