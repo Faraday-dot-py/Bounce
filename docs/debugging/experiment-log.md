@@ -513,3 +513,19 @@ rollout, `findings-correction-drift-and-mass-dissolution.md` Part 2) —
 already documented, not a new regression, candidate fixes (nearest-
 neighbor resampling under the model's real predicted flow, or a
 training-time sharpness/peakiness regularizer) not yet tried.
+
+A fresh unbiased subagent video review (frame-by-frame, not just the
+sparse diagnostic-grid columns) of `videos/stage2_flownet_v6_rollout_comparison.mp4`
+makes clear this "lower-priority" item is now the dominant remaining
+problem in practice: with quilting and VX/VY drift both fixed, v6's
+rollout still visibly collapses from crisp discrete balls to a
+featureless blurred blob by step ~4, and to a fully flat, static
+two-tone band with *zero* ball structure by step ~7-13, staying there
+for the rest of the rollout — while ground truth keeps evolving with
+sharp, discrete, physically structured balls the whole time. This
+matches this session's opening user-raised concern ("we need a way to
+keep the balls together, they seem to drift apart... dissolve") more
+directly than any of the artifact-specific bugs fixed so far — it was
+simply harder to see clearly underneath the checkerboard/gridding/
+oscillation/quilting/drift artifacts that got fixed first. Promoting
+this to the active investigation, next in this log.
