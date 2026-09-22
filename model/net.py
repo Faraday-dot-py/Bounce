@@ -68,12 +68,25 @@ class BounceNextFrameModel(nn.Module):
     mean to the initial frame isn't physically justified the way it is
     for occupied "mass". See
     docs/debugging/findings-padding-mass-conservation.md.
+
+    Before renormalization, PROB is soft-thresholded (`relu(prob -
+    prob_threshold)`): repeated bicubic resampling diffuses PROB mass
+    into low-magnitude noise across nearly the entire grid by ~step 8
+    (confirmed against ground truth, which stays sparse), and exact
+    mass renormalization then perpetually rescales that near-background
+    diffusion noise back up to the true total mass every step, since
+    the renorm sum has no way to distinguish real occupancy from
+    diffused noise -- this produced a persistent, growing blocky/tiled
+    "quilt" artifact. Thresholding before the sum (and before scaling)
+    removes the near-zero diffusion tail so it can't be counted as
+    mass. See docs/debugging/findings-quilting-artifact.md.
     """
 
-    def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2):
+    def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2, prob_threshold=0.015):
         super().__init__()
         self.max_flow = max_flow
         self.max_correction = max_correction
+        self.prob_threshold = prob_threshold
         self.stem = nn.Conv2d(in_channels, channels, 3, padding=1, padding_mode="replicate")
         dilations = [DILATIONS[i % len(DILATIONS)] for i in range(depth)]
         self.blocks = nn.ModuleList([ResidualConvBlock(channels, d) for d in dilations])
@@ -107,8 +120,9 @@ class BounceNextFrameModel(nn.Module):
         warped = F.grid_sample(g_t, sample_grid, mode="bicubic", padding_mode="border", align_corners=True)
         out = warped + correction
 
+        prob_thresholded = F.relu(out[:, 0:1] - self.prob_threshold)
         prob_in = g_t[:, 0:1].sum(dim=(2, 3), keepdim=True)
-        prob_out = out[:, 0:1].sum(dim=(2, 3), keepdim=True)
+        prob_out = prob_thresholded.sum(dim=(2, 3), keepdim=True)
         scale = prob_in / (prob_out + 1e-6)
-        out = torch.cat([out[:, 0:1] * scale, out[:, 1:]], dim=1)
+        out = torch.cat([prob_thresholded * scale, out[:, 1:]], dim=1)
         return out
