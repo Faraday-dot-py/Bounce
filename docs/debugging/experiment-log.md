@@ -529,3 +529,77 @@ directly than any of the artifact-specific bugs fixed so far — it was
 simply harder to see clearly underneath the checkerboard/gridding/
 oscillation/quilting/drift artifacts that got fixed first. Promoting
 this to the active investigation, next in this log.
+
+## 2026-09-22 — peak-decay root-caused: objective-level (loss prefers blur), not resampling/horizon; fix attempt exposes a deeper tradeoff
+
+Subagent investigation (`docs/debugging/findings-peak-decay-dissolution.md`)
+root-caused the collapse to `occupancy_weighted_mse` itself: evaluated
+directly on synthetic targets, the loss provably prefers a diffuse,
+mass-matched blob over a sharp disk merely shifted ~2px, since it has
+no mechanism to penalize spread once mass is inside the (binary)
+occupied mask. The model's flow head learned locally divergent flow as
+its implementation of this incentive; this happens under any
+`grid_sample` mode (bilinear/bicubic/nearest all tested, all converge
+to the same collapse), so it isn't a resampling artifact, and the
+collapse completes well inside the trained `horizon=12` window, so
+longer-horizon training isn't the lever either (both directly tested
+and ruled out, per this session's standing rule against defaulting to
+"train longer").
+
+**Fix attempted** (`model/losses.py`, `model/train.py`, commit
+`827d5b2`): added a peak-magnitude term to `occupancy_weighted_mse`
+(`peak_weight=0.1` default, new `--peak-weight` train arg) penalizing
+the predicted frame's global PROB peak diverging from the target's.
+Verified on the exact synthetic scenario from the investigation that
+this flips the loss's preference from blob-wins to sharp-wins (even
+`peak_weight=0.02` already flips it). New regression test encodes both
+the bug and the fix as one assertion pair. 30/30 tests pass.
+
+Retrained as `stage2_flownet_h12_v7.pt` (job 2829). Verified via the
+standard pipeline: step-1 MSE unaffected (0.70x vs v6's 0.71x); the
+targeted metric is genuinely fixed (`max0` now stays 0.54-0.85 across
+all 30 steps, vs. v6's collapse to a flat 0.036-0.040 floor by step 8);
+VX/VY drift and quilting both remain fixed. **But an unbiased video
+review found a new, not-clearly-better failure mode**: instead of
+blurring uniformly everywhere (v6), v7 concentrates into a smeared blob
+in one screen region while abandoning most other balls to solid black,
+plus a new faint periodic diagonal ripple from step ~23 on. A follow-up
+synthetic probe (`findings-peak-decay-dissolution.md` Part 5) shows
+this is not a bug introduced by the peak term but a second,
+previously-hidden failure mode of the *same* base loss: once a ball's
+predicted position has already drifted (the normal state past the
+first few autoregressive steps), committing to any specific nearby
+position costs more loss than giving up on it entirely (a
+confident-but-wrong prediction double-penalizes: false-positive bright
+cell + missed true-position cell). Closing off the "blur as hedge"
+strategy (which worked, as designed) simply revealed "give up as
+hedge" as gradient descent's next-cheapest option under the same
+underlying objective — the textbook two-sided failure mode of
+deterministic point-estimate regression under genuine multimodal
+(chaotic multi-ball) uncertainty.
+
+**Conclusion: this is not resolved, and is not a same-night-fixable bug
+like the quilting/drift chain.** It's a fundamental property of dense
+per-cell regression under a pointwise loss for an inherently chaotic
+multi-ball system, not a clean implementation defect. Recommended next
+steps (not attempted, deliberately left for human judgment given the
+scope): regional/local peak-preservation instead of one global peak
+(untested even synthetically here beyond an inconclusive isolated
+probe); explicitly bounding and reporting the honest rollout horizon
+this architecture can support rather than continuing to chase 30-step
+quality; or a genuinely different output representation (per-ball
+tracked state, or a probabilistic/multi-hypothesis output) — a
+substantially larger redesign than anything else done this session.
+
+**Checkpoint recommendation**: `stage2_flownet_h12_v6.pt` remains the
+current default — every artifact/drift bug from this session's chain
+(windowed-attention checkerboard, edge/gridding lattice, period-2
+oscillation, quilting/tiling, VX/VY drift) is fixed and verified in it,
+with a well-understood, honestly-reported residual blur-collapse
+limitation. `stage2_flownet_h12_v7.pt` is kept as a documented
+experimental variant (different, not clearly better, residual
+limitation) — useful as evidence for the diagnosis above, not adopted
+as a replacement default. Both checkpoints, and the three next-step
+options above, should be reviewed by a human before further model-side
+work continues, since the real remaining options are design decisions
+about the modeling approach, not bugs to fix.

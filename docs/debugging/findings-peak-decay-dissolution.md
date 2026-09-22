@@ -337,3 +337,110 @@ scratchpad, not in the repo (same convention as prior findings docs):
 If a follow-up wants these as permanent repo tools, they should be
 cleaned up and added under `scripts/`, following the same pattern as
 `scripts/investigate_gridding_artifact.py`.
+
+## Part 5 (2026-09-22, post-retrain): the peak term fixes the metric but exposes a deeper, harder tradeoff -- not a clean win
+
+The peak-magnitude term recommended above was implemented
+(`model/losses.py`, `peak_weight=0.1` default) and retrained end-to-end
+as `checkpoints/stage2_flownet_h12_v7.pt` (job 2829, otherwise identical
+hyperparameters to v6). Verified via the standard pipeline:
+
+- Step-1 MSE-vs-copy-baseline: 0.70x (v6 was 0.71x) -- no regression.
+- **The specific collapse metric this fix targeted is fixed**: `max0`
+  (peak PROB intensity) now stays in the 0.54-0.85 range at every step
+  0-30 (was decaying to a flat 0.036-0.040 floor by step 8 in v6).
+  `nz_frac` stabilizes at a moderate 0.3-0.58 (was saturating to
+  0.75-0.84 in v6). VX/VY drift remains exactly fixed (unaffected by
+  this change, as expected). No quilting/blockiness regression
+  (block-variance metric 0.07-0.7, comparable to v6's early steps, far
+  below v6's late-step 15-35 peak).
+- **But an unbiased subagent video review found a new, different failure
+  mode, not obviously better**: the model still diverges from ground
+  truth starting ~step 3-5, but instead of v6's uniform blur-everywhere
+  collapse, v7 **concentrates into a smeared, overlapping blob in one
+  screen region (bottom-left in the tested rollout) while the rest of
+  the frame goes to solid black**, abandoning most of the other balls
+  entirely rather than blurring them. A new **faint periodic diagonal
+  ripple/moire pattern** appears in a different region from step ~23
+  onward (low intensity, not present in v6 or ground truth).
+
+### Root cause of the new failure mode: identified directly, not merely observed
+
+A synthetic single-step probe (two-ball scenario, one ball already
+mispositioned from a hypothetical prior autoregressive step) shows the
+mechanism is not really about the peak term specifically -- it's an
+incentive already present in the base `occupancy_weighted_mse`:
+
+```
+scenario                                       base_loss   total(+peak, w=0.1)
+give up on ball2 (predict near-zero there)     0.00313     0.00313
+keep guessing near ball2's last position       0.00328     0.00328
+```
+
+**Once a ball's predicted position has already drifted from its true
+position (the normal state past the first few autoregressive steps,
+given chaotic multi-ball collisions), committing to *any* specific
+nearby position costs more loss than giving up entirely** -- a
+confident-but-wrong prediction incurs a double penalty (a false-positive
+bright cell at the wrong location *and* a missed true-position cell),
+while predicting near-zero only incurs the missed-cell penalty once.
+This was always true of the base loss; it just wasn't visible before
+because the (also loss-optimal, per Part 2) alternative of blurring
+everywhere let the network hedge across many plausible positions at
+once, which is cheaper than either committing or giving up. **The peak
+term successfully closed off the "blur everywhere" hedge (that was its
+job, and it worked), which meant the network's next-cheapest option
+under the same base loss was "commit confidently to what's still easy,
+give up on what's uncertain"** -- not a bug introduced by the peak
+term, but a second, previously-hidden failure mode of the same
+underlying objective, now exposed once the first one was fixed. This
+is the textbook two-sided failure mode of deterministic point-estimate
+regression under genuine multimodal uncertainty (blur-as-hedge vs.
+give-up-as-hedge): closing off one side does not eliminate the
+uncertainty, it just changes which cheap-but-wrong strategy gradient
+descent finds instead.
+
+### Assessment: real progress, not a clean fix -- do not treat as resolved
+
+This is **not a fixable-by-another-loss-term problem in the same style
+as tonight's other fixes** (quilting, VX/VY drift) -- those were
+genuine implementation bugs with a clean root cause and a fix that
+left no comparably-sized side effect. This one is a fundamental
+property of the modeling approach (dense per-cell regression under a
+pointwise loss, predicting a single deterministic future for an
+inherently chaotic multi-ball system) that reappears in a different
+shape no matter which side of the blur/give-up tradeoff is
+suppressed. Concretely recommended options for whoever picks this up
+next, roughly in order of effort:
+
+1. **Regional/local peak-preservation instead of a single global peak**
+   (e.g. `F.max_pool2d` over tiles, matching each tile's local max
+   rather than one frame-wide max) -- tested only in an isolated
+   synthetic single-step probe here (not retrained), and did not show a
+   clearly larger penalty for the give-up strategy than the global
+   version did in that same probe, so it is not a confirmed fix, only
+   an untested next thing to try.
+2. **Accept and bound the honest horizon**: rather than continuing to
+   chase 30-step rollout quality, characterize and report the actual
+   step count at which multi-ball position uncertainty becomes
+   irreducible for point-estimate regression (this session's data
+   suggests single-digit steps), and treat longer rollouts as
+   out-of-scope for this architecture rather than a bug to fix.
+3. **A genuinely different output representation** (e.g. per-ball
+   tracked state instead of a dense occupancy grid, or a probabilistic/
+   multi-hypothesis output such as a mixture density or ensemble) would
+   remove the forced choice between blur and give-up, but is a
+   substantially larger redesign than anything else done this session
+   and should be a deliberate decision, not something to start
+   unprompted overnight.
+
+**Recommendation for now**: keep `stage2_flownet_h12_v6.pt` as the
+current default (it has every artifact/drift bug from this session's
+earlier chain fixed, with a well-understood, honestly-reported residual
+blur-collapse limitation). Treat `stage2_flownet_h12_v7.pt` as a
+documented experimental variant with a different, not clearly better,
+residual limitation -- useful primarily as evidence for the diagnosis
+above, not as a drop-in upgrade. Both checkpoints and this finding
+should be reviewed by a human before choosing a direction, since the
+real options above (especially #3) are design decisions, not bug
+fixes.
