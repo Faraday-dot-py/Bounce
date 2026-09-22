@@ -61,6 +61,40 @@ def test_bg_weight_one_matches_weighted_channel_mse():
     assert torch.isclose(loss_occ, loss_uniform)
 
 
+def test_background_error_less_diluted_than_grid_wide_mean():
+    # Regression test for the root-cause fix: previously, background PROB
+    # error was averaged over the *entire* grid (occ+bg combined), diluting
+    # a widespread small background error (e.g. a growing periodic artifact)
+    # into near-invisibility once background pixels dominate the grid (as
+    # they do in practice: ~10% occupancy). The fixed formula normalizes
+    # background error by the background pixel count itself, so the same
+    # absolute error produces a much larger, size-appropriate contribution.
+    n = 50
+    occ_frac = 0.1
+    num_occ = int(occ_frac * n * n)
+    target = torch.zeros(1, 3, n, n)
+    flat = target[0, 0].view(-1)
+    flat[:num_occ] = 1.0
+    source = target.clone()
+    pred = target.clone()
+    pred[:, 0, :, :] += 0.05  # small widespread error, e.g. a periodic ripple
+    pred_flat = pred[0, 0].view(-1)
+    pred_flat[:num_occ] = 1.0  # occupied cells predicted exactly
+
+    weights = torch.tensor([1.0, 0.0, 0.0])
+    bg_weight = 0.05
+    fixed_loss = occupancy_weighted_mse(pred, target, source, weights, bg_weight=bg_weight)
+
+    occ_count = num_occ
+    bg_count = n * n - num_occ
+    bg_sum_err = bg_count * (0.05 ** 2)
+    old_grid_wide_loss = (bg_weight * bg_sum_err) / (n * n)
+    new_formula_expected = (bg_weight * bg_sum_err) / (occ_count + bg_weight * bg_count)
+
+    assert torch.isclose(fixed_loss, torch.tensor(new_formula_expected), rtol=1e-4)
+    assert fixed_loss > old_grid_wide_loss * 5
+
+
 def test_vacated_cell_keeps_full_weight_via_source_occupancy():
     source = torch.zeros(1, 3, 10, 10)
     source[:, 0, 5, 5] = 1.0  # occupied at t

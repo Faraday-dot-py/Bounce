@@ -6,11 +6,12 @@ from model.block import SwinBlock
 
 class BounceNextFrameModel(nn.Module):
     def __init__(self, in_channels=3, patch_size=2, embed_dim=128, depth=6,
-                 num_heads=4, window_size=8, mlp_ratio=4.0):
+                 num_heads=4, window_size=8, mlp_ratio=4.0, randomize_offset=True):
         super().__init__()
         self.patch_embed = PatchEmbed(in_channels, patch_size, embed_dim)
         self.blocks = nn.ModuleList([
-            SwinBlock(embed_dim, num_heads, window_size, shift=(i % 2 == 1), mlp_ratio=mlp_ratio)
+            SwinBlock(embed_dim, num_heads, window_size, shift=(i % 2 == 1), mlp_ratio=mlp_ratio,
+                      randomize_offset=randomize_offset)
             for i in range(depth)
         ])
         self.unpatchify = Unpatchify(embed_dim, patch_size, in_channels)

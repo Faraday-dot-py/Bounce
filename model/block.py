@@ -6,17 +6,18 @@ from model.attention import WindowAttention
 
 
 class SwinBlock(nn.Module):
-    def __init__(self, dim, num_heads, window_size, shift, mlp_ratio=4.0):
+    def __init__(self, dim, num_heads, window_size, shift, mlp_ratio=4.0, randomize_offset=False):
         super().__init__()
         self.window_size = window_size
-        self.shift_size = window_size // 2 if shift else 0
+        self.base_shift = window_size // 2 if shift else 0
+        self.randomize_offset = randomize_offset
         self.norm1 = nn.LayerNorm(dim)
         self.attn = WindowAttention(dim, window_size, num_heads)
         self.norm2 = nn.LayerNorm(dim)
         hidden = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
 
-    def forward(self, x):
+    def forward(self, x, offset=None):
         B, H, W, C = x.shape
         shortcut = x
         x = self.norm1(x)
@@ -25,12 +26,16 @@ class SwinBlock(nn.Module):
         Hp, Wp = x.shape[1], x.shape[2]
         has_padding = (Hp != orig_H) or (Wp != orig_W)
 
-        if self.shift_size > 0:
-            x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            mask = compute_shift_mask(Hp, Wp, self.window_size, self.shift_size, x.device)
+        if offset is None:
+            offset = int(torch.randint(0, self.window_size, (1,)).item()) if self.randomize_offset else 0
+        shift_size = (self.base_shift + offset) % self.window_size
+
+        if shift_size > 0:
+            x = torch.roll(x, shifts=(-shift_size, -shift_size), dims=(1, 2))
+            mask = compute_shift_mask(Hp, Wp, self.window_size, shift_size, x.device)
             if has_padding:
                 validity_mask = compute_validity_mask(
-                    Hp, Wp, orig_H, orig_W, self.window_size, x.device, roll_shift=self.shift_size,
+                    Hp, Wp, orig_H, orig_W, self.window_size, x.device, roll_shift=shift_size,
                 )
                 mask = torch.minimum(mask, validity_mask)
         else:
@@ -44,8 +49,8 @@ class SwinBlock(nn.Module):
         attn_out = attn_out.view(-1, self.window_size, self.window_size, C)
         x = window_reverse(attn_out, self.window_size, Hp, Wp)
 
-        if self.shift_size > 0:
-            x = torch.roll(x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
+        if shift_size > 0:
+            x = torch.roll(x, shifts=(shift_size, shift_size), dims=(1, 2))
 
         x = x[:, :orig_H, :orig_W, :]
         x = shortcut + x

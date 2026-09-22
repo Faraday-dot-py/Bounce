@@ -21,11 +21,11 @@ def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight):
     weights = weights.to(device)
     frame = sequence[:, 0]
     total = 0.0
-    self_feed = random.random() < sampling_p
     for k in range(1, horizon + 1):
         target = sequence[:, k]
         pred = model(frame)
         total = total + occupancy_weighted_mse(pred, target, frame, weights, bg_weight=bg_weight)
+        self_feed = random.random() < sampling_p
         frame = pred.detach() if self_feed else target
     return total / horizon
 
@@ -58,6 +58,7 @@ def train(args):
             loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight)
             opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             opt.step()
             total_loss += loss.item()
         avg = total_loss / len(loader)

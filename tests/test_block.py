@@ -7,6 +7,48 @@ from model.block import SwinBlock
 from model.windows import pad_to_multiple as base_pad_to_multiple
 
 
+def test_default_offset_matches_old_fixed_shift_behavior():
+    # randomize_offset defaults to False and offset defaults to None -> 0,
+    # so existing (pre-jitter) callers see identical, deterministic behavior.
+    torch.manual_seed(4738)
+    block = SwinBlock(dim=16, num_heads=4, window_size=8, shift=True)
+    block.eval()
+    x = torch.randn(1, 16, 16, 16)
+    out1 = block(x)
+    out2 = block(x)
+    assert torch.equal(out1, out2)
+
+
+def test_explicit_offset_changes_window_alignment():
+    torch.manual_seed(4738)
+    block = SwinBlock(dim=16, num_heads=4, window_size=8, shift=False)
+    block.eval()
+    x = torch.randn(1, 16, 16, 16)
+    out_offset0 = block(x, offset=0)
+    out_offset3 = block(x, offset=3)
+    assert out_offset0.shape == out_offset3.shape == x.shape
+    assert not torch.equal(out_offset0, out_offset3)
+
+
+def test_randomize_offset_draws_from_torch_randint():
+    block = SwinBlock(dim=16, num_heads=4, window_size=8, shift=False, randomize_offset=True)
+    block.eval()
+    x = torch.randn(1, 16, 16, 16)
+    with patch.object(block_module.torch, "randint", return_value=torch.tensor([5])) as mock_randint:
+        block(x)
+    mock_randint.assert_called_once()
+    args, _ = mock_randint.call_args
+    assert args[0] == 0 and args[1] == 8  # low, high bounds are (0, window_size)
+
+
+def test_randomize_offset_still_preserves_shape_and_runs():
+    block = SwinBlock(dim=16, num_heads=4, window_size=8, shift=True, randomize_offset=True)
+    x = torch.randn(2, 25, 25, 16)  # non-multiple-of-window-size, exercises padding too
+    for _ in range(5):
+        out = block(x)
+        assert out.shape == x.shape
+
+
 def test_swin_block_preserves_shape_multiple_of_window():
     block = SwinBlock(dim=16, num_heads=4, window_size=8, shift=False)
     x = torch.randn(2, 16, 16, 16)
