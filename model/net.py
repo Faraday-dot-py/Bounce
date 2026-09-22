@@ -56,6 +56,18 @@ class BounceNextFrameModel(nn.Module):
     from bilinear resampling alone), bicubic preserves peak sharpness
     substantially better. See
     docs/debugging/findings-correction-drift-and-mass-dissolution.md.
+
+    The PROB channel (0) is renormalized after each step so its frame-
+    wide sum matches the pre-warp frame's sum. grid_sample does no
+    Jacobian-determinant correction for locally convergent/divergent flow
+    fields, so any region where predicted flow compresses (converges) is
+    structurally oversampled every step regardless of padding_mode --
+    this drove a persistent PROB->VX/VY drift even after the fixes above.
+    VX/VY (channels 1/2) are left unrenormalized since they're physical
+    velocity fields, not a conserved quantity -- pinning their frame-wide
+    mean to the initial frame isn't physically justified the way it is
+    for occupied "mass". See
+    docs/debugging/findings-padding-mass-conservation.md.
     """
 
     def __init__(self, in_channels=3, channels=64, depth=len(DILATIONS), max_flow=4.0, max_correction=0.2):
@@ -93,4 +105,10 @@ class BounceNextFrameModel(nn.Module):
         sample_grid = torch.stack([norm_x, norm_y], dim=-1)
 
         warped = F.grid_sample(g_t, sample_grid, mode="bicubic", padding_mode="border", align_corners=True)
-        return warped + correction
+        out = warped + correction
+
+        prob_in = g_t[:, 0:1].sum(dim=(2, 3), keepdim=True)
+        prob_out = out[:, 0:1].sum(dim=(2, 3), keepdim=True)
+        scale = prob_in / (prob_out + 1e-6)
+        out = torch.cat([out[:, 0:1] * scale, out[:, 1:]], dim=1)
+        return out
