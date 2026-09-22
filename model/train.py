@@ -1,21 +1,44 @@
 import argparse
+import random
 
 import torch
 from torch.utils.data import DataLoader
 
-from model.dataset import BouncePairDataset
+from model.dataset import BounceSequenceDataset
 from model.net import BounceNextFrameModel
 from model.losses import occupancy_weighted_mse
+
+
+def sampling_probability(epoch, ramp_epochs):
+    if ramp_epochs <= 0:
+        return 1.0
+    return min(1.0, epoch / ramp_epochs)
+
+
+def rollout_loss(model, sequence, horizon, sampling_p, weights, bg_weight):
+    device = next(model.parameters()).device
+    sequence = sequence.to(device)
+    weights = weights.to(device)
+    frame = sequence[:, 0]
+    total = 0.0
+    self_feed = random.random() < sampling_p
+    for k in range(1, horizon + 1):
+        target = sequence[:, k]
+        pred = model(frame)
+        total = total + occupancy_weighted_mse(pred, target, frame, weights, bg_weight=bg_weight)
+        frame = pred.detach() if self_feed else target
+    return total / horizon
 
 
 def train(args):
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = BouncePairDataset(
+    dataset = BounceSequenceDataset(
         num_samples=args.num_samples,
         n=args.n,
         ball_range=(args.min_balls, args.max_balls),
         seed=args.seed,
+        horizon=args.horizon,
         cache_path=args.cache_path,
     )
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
@@ -25,19 +48,19 @@ def train(args):
     ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor(args.channel_weights, device=device)
+    ramp_epochs = args.sampling_ramp_epochs if args.sampling_ramp_epochs is not None else args.epochs
 
     for epoch in range(args.epochs):
+        p = sampling_probability(epoch, ramp_epochs)
         total_loss = 0.0
-        for g_t, g_t1 in loader:
-            g_t, g_t1 = g_t.to(device), g_t1.to(device)
-            pred = model(g_t)
-            loss = occupancy_weighted_mse(pred, g_t1, g_t, weights, bg_weight=args.bg_weight)
+        for sequence in loader:
+            loss = rollout_loss(model, sequence, args.horizon, p, weights, args.bg_weight)
             opt.zero_grad()
             loss.backward()
             opt.step()
             total_loss += loss.item()
         avg = total_loss / len(loader)
-        print(f"epoch {epoch} loss {avg:.6f}")
+        print(f"epoch {epoch} loss {avg:.6f} sampling_p {p:.3f}")
         torch.save(model.state_dict(), args.checkpoint)
 
 
@@ -57,6 +80,8 @@ def build_arg_parser():
     ap.add_argument("--window-size", type=int, default=8)
     ap.add_argument("--channel-weights", type=float, nargs=3, default=[1.0, 0.1, 0.1])
     ap.add_argument("--bg-weight", type=float, default=0.05)
+    ap.add_argument("--horizon", type=int, default=3)
+    ap.add_argument("--sampling-ramp-epochs", type=int, default=None)
     ap.add_argument("--checkpoint", type=str, default="checkpoint.pt")
     ap.add_argument("--cache-path", type=str, default=None)
     return ap
