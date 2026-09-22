@@ -76,5 +76,5 @@ if __name__ == "__main__":
         return ims + [step_text]
 
     anim = animation.FuncAnimation(fig, update, frames=num_steps + 1, interval=300, blit=False)
-    anim.save("stage2_rollout_comparison.mp4", writer="ffmpeg", fps=3, dpi=120)
-    print("wrote stage2_rollout_comparison.mp4")
+    anim.save("videos/stage2_rollout_comparison.mp4", writer="ffmpeg", fps=3, dpi=120)
+    print("wrote videos/stage2_rollout_comparison.mp4")
