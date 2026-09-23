@@ -114,7 +114,8 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
                         neighbor_radius=args.neighbor_radius,
-                        velocity_weight=args.velocity_weight).to(device)
+                        velocity_weight=args.velocity_weight,
+                        territory_masking=args.territory_masking).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -165,6 +166,12 @@ def main():
     # (see model/token_model.py TokenModel.__init__'s docstring); 0.0
     # keeps existing behavior unchanged.
     ap.add_argument("--velocity-weight", type=float, default=0.0)
+    # Opt-in per-token observation-window exclusivity (see
+    # model/token_model.py TokenModel.__init__'s docstring). Off by
+    # default so existing recipes/checkpoints are byte-for-byte
+    # unaffected -- see docs/debugging/experiment-log.md's v14 final
+    # review for why the default must stay off.
+    ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--boundary-weight", type=float, default=0.1)

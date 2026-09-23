@@ -25,9 +25,10 @@ from model.token_match import match_tokens_to_state
 from model.token_gate import occluding_mask
 
 
-def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0):
+def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0,
+                territory_masking=False):
     model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
-                        velocity_weight=velocity_weight)
+                        velocity_weight=velocity_weight, territory_masking=territory_masking)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -63,31 +64,58 @@ def peak_prob_at(prob, position, radius=0.75, margin=1.0):
     return float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].max())
 
 
-def window_total_at(prob, position, radius, margin, max_expansions=3):
+def window_total_at(prob, position, radius, margin, max_expansions=3,
+                     all_positions=None, self_idx=None):
     """Mirrors `centroid_near`'s own widened-search loop (base window plus
-    up to `max_expansions` growing retries) and returns the mass sum of
-    whichever window it would settle on -- 0.0 only if EVERY widened
-    attempt comes up empty, i.e. the real bailout condition post-fix.
-    Reporting just the base window's mass (the pre-widening behavior this
-    function used to have) mislabeled steps the real widened
-    `centroid_near` call recovers from as BAILOUT; see
-    docs/debugging/experiment-log.md."""
+    up to `max_expansions` growing retries, territory-masked when
+    `all_positions`/`self_idx` are given, with the same unmasked fallback
+    centroid_near itself uses when the masked search comes up completely
+    empty) and returns the mass sum of whichever window it would settle
+    on -- 0.0 only if EVERY attempt (masked and, if applicable, the
+    unmasked fallback) comes up empty, i.e. the real bailout condition.
+    Must be called with the SAME max_expansions/masking the model under
+    test actually uses (see this file's call site, which reads
+    `model.max_expansions`/`model.territory_masking`) -- a stale mirror
+    mislabels steps the real call recovers from as BAILOUT; see
+    docs/debugging/experiment-log.md's v14 final review, which found
+    exactly this drift after territory masking was added."""
     import math
-    n = prob.shape[0]
-    step = max(1, int(math.ceil(radius)))
-    base_half = int(np.ceil(radius + margin))
-    cx = int(round(float(position[0])))
-    cy = int(round(float(position[1])))
-    for expansion in range(max_expansions + 1):
-        half = base_half + expansion * step
-        i_lo_raw, i_hi_raw = cx - half, cx + half
-        j_lo_raw, j_hi_raw = cy - half, cy + half
-        if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
-            continue
-        i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
-        j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
-        total = float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
-        if total > 1e-6:
+    from model.token_detect import territory_mask
+
+    def _search(masked):
+        n = prob.shape[0]
+        step = max(1, int(math.ceil(radius)))
+        base_half = int(np.ceil(radius + margin))
+        cx = int(round(float(position[0])))
+        cy = int(round(float(position[1])))
+        for expansion in range(max_expansions + 1):
+            half = base_half + expansion * step
+            i_lo_raw, i_hi_raw = cx - half, cx + half
+            j_lo_raw, j_hi_raw = cy - half, cy + half
+            if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+                continue
+            i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+            j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
+            window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
+            if masked and all_positions is not None and self_idx is not None:
+                ii = torch.arange(i_lo, i_hi + 1, dtype=prob.dtype).view(-1, 1)
+                jj = torch.arange(j_lo, j_hi + 1, dtype=prob.dtype).view(1, -1)
+                ii_grid = ii.expand(window.shape[0], window.shape[1])
+                jj_grid = jj.expand(window.shape[0], window.shape[1])
+                mask = territory_mask(ii_grid, jj_grid, all_positions, self_idx)
+                window = window * mask.to(window.dtype)
+            total = float(window.sum())
+            if total > 1e-6:
+                return total
+        return None
+
+    use_mask = all_positions is not None and self_idx is not None
+    total = _search(masked=use_mask)
+    if total is not None:
+        return total
+    if use_mask:
+        total = _search(masked=False)
+        if total is not None:
             return total
     return 0.0
 
@@ -103,12 +131,16 @@ def main():
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
     ap.add_argument("--velocity-weight", type=float, default=0.0)
+    ap.add_argument("--territory-masking", action="store_true",
+                     help="evaluate the checkpoint with territory masking enabled -- must match "
+                          "how it was trained (--territory-masking in token_train.py)")
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
     ap.add_argument("--trace", action="store_true",
                      help="print per-step window_total/occlusion for each dropped token")
     args = ap.parse_args()
 
-    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight)
+    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight,
+                        territory_masking=args.territory_masking)
 
     dropout_ball_idx = []
     frame1_peak_by_ball = {}
@@ -154,7 +186,12 @@ def main():
                     torch.tensor(gt_state["y"], dtype=torch.float32),
                 ], dim=1)
                 for t in range(num_tokens):
-                    wt = window_total_at(observed[0], positions[t], model.radius, model.detect_margin)
+                    wt = window_total_at(
+                        observed[0], positions[t], model.radius, model.detect_margin,
+                        max_expansions=model.max_expansions,
+                        all_positions=positions if model.territory_masking else None,
+                        self_idx=t if model.territory_masking else None,
+                    )
                     ball = int(token_to_ball[t])
                     gt_err = float(torch.norm(positions[t] - gt_pos[ball]))
                     all_err = torch.norm(gt_pos - positions[t].unsqueeze(0), dim=1)
