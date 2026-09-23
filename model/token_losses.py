@@ -3,6 +3,7 @@ import math
 import torch
 
 from model.losses import occupancy_weighted_mse
+from model.token_detect import territory_mask
 
 
 def token_grid_loss(pred_grid, target_grid, source_grid, weights, bg_weight=0.05,
@@ -63,7 +64,8 @@ def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0
     return pos_loss + vel_weight * vel_loss
 
 
-def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3):
+def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3,
+                          all_positions=None, self_idx_offset=0):
     """Penalizes a token whose own rasterized PROB mass near its tracked
     position falls below `floor`, closing the give-up shortcut identified
     in docs/debugging/experiment-log.md's v9-v12 synthesis: neither
@@ -89,7 +91,19 @@ def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3):
 
     The window's location is derived from a detached, rounded position
     (matching centroid_near) -- this penalizes the network for the mass
-    it puts down, not for moving the position to chase existing mass."""
+    it puts down, not for moving the position to chase existing mass.
+
+    When `all_positions` is given (the full tracked-token tensor this
+    call's `positions` is drawn from, or identical to `positions` itself
+    when every token is being penalized in one call), each token i's
+    window sum excludes mass outside its territory (see
+    model.token_detect.territory_mask) before comparing against `floor`
+    -- otherwise a token near a healthy neighbor could get credit for
+    mass that was never its own, reintroducing the incentive this loss
+    exists to remove (see docs/superpowers/specs/2026-09-23-token-territory-masking-design.md).
+    `self_idx_offset` lets a caller penalize a subset of `positions` that
+    starts partway through `all_positions` (0 in every current call
+    site)."""
     if positions.shape[0] == 0:
         return positions.new_zeros(())
     n = prob.shape[0]
@@ -103,7 +117,15 @@ def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3):
         if i_lo > i_hi or j_lo > j_hi:
             totals.append(prob.new_zeros(()))
             continue
-        totals.append(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
+        window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
+        if all_positions is not None:
+            ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
+            jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
+            ii_grid = ii.expand(window.shape[0], window.shape[1])
+            jj_grid = jj.expand(window.shape[0], window.shape[1])
+            mask = territory_mask(ii_grid, jj_grid, all_positions, self_idx_offset + i)
+            window = window * mask.to(window.dtype)
+        totals.append(window.sum())
     total = torch.stack(totals)
     deficit = torch.relu(floor - total)
     return (deficit ** 2).mean()

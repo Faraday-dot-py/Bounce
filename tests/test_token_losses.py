@@ -248,3 +248,30 @@ def test_window_collapse_loss_gradient_flows_to_prob():
     loss.backward()
     assert prob.grad is not None
     assert prob.grad[5, 5] != 0.0
+
+
+def test_window_collapse_loss_territory_masks_out_neighbour_mass():
+    # Token 0 sits right next to token 1's real mass but has none of its
+    # own -- unmasked, its window would see token 1's mass and score
+    # fine; territory-masked, it must still be penalized.
+    n = 20
+    prob = torch.zeros(n, n)
+    prob[12, 10] = 0.9  # token 1's real mass
+    positions = torch.tensor([[8.0, 10.0], [12.0, 10.0]])
+
+    loss_unmasked = window_collapse_loss(prob, positions[:1], radius=1.5, margin=3.0, floor=0.3)
+    loss_masked = window_collapse_loss(prob, positions[:1], radius=1.5, margin=3.0, floor=0.3,
+                                        all_positions=positions, self_idx_offset=0)
+    assert loss_unmasked == 0.0  # unmasked window at radius+margin=4.5 reaches x=12
+    assert loss_masked > 0.0
+
+
+def test_window_collapse_loss_territory_default_unaffected():
+    n = 10
+    prob = torch.zeros(n, n)
+    prob[5, 5] = 0.8
+    positions = torch.tensor([[5.0, 5.0]])
+    baseline = window_collapse_loss(prob, positions, radius=0.75, floor=0.3)
+    with_none = window_collapse_loss(prob, positions, radius=0.75, floor=0.3,
+                                      all_positions=None)
+    assert torch.allclose(baseline, with_none)
