@@ -1594,3 +1594,76 @@ loss ever looks at detection/observation strength, only ground-truth
 state error), or making token permanence itself a structural
 guarantee rather than an emergent property the network has to learn
 not to violate.
+
+**Job 2856 result (`checkpoints/token_model_h12_v12.pt`,
+`state_vel_weight` 0.1 -> 1.0): also worse, not better.** Same 48-seed
+diagnostic: self-fed position error flat-to-worse vs v9 (6.27 vs 5.50
+cells at step 18), teacher-forced error unchanged (still flat, 0.2-0.9
+cells) -- confirms yet again that single-step dynamics accuracy was
+never the issue. Dropout count **27/48** (9/5/7/6 by ball index),
+4.5x v9's 6/48. Weighting velocity error 10x harder in the direct
+state loss didn't teach better velocity tracking under self-feed; it
+made more tokens vanish, similar in kind (if not quite degree) to v11.
+
+## Synthesis: three single-variable fixes tried tonight, all negative -- stopping here, this needs a human call
+
+Starting point was the user's own question: single-step (t -> t+1)
+prediction looked "nearly perfect," so where does rollout error
+compound? Answered that cleanly and for real
+(`scripts/measure_error_compounding.py`): teacher-forced per-step
+position error is flat and small (0.2-0.9 cells) across every step
+tested, on all four checkpoints trained tonight, no exceptions --
+single-step dynamics genuinely is fine, every time. Self-fed velocity
+error is where it actually compounds (1.7 -> 9+ cells/s within 9
+steps), and position error tracks it in lockstep through
+`final_pos = corrected_pos + velocities * dt + delta_pos`.
+
+Three independent, single-variable attempts to fix that, each
+isolated against the v9 baseline (same recipe, one change each), each
+directly motivated by that measurement rather than guessed:
+
+| job | change | self-fed pos err (step 18) | dropout / 48 |
+|---|---|---|---|
+| v9 (baseline) | -- | 5.50 | 6 |
+| v10 | trained-in explicit velocity re-anchoring (`TokenModel.step`, `velocity_weight=0.5`) | 5.55 | 10 |
+| v11 | 5x training (epochs 3->15) | 6.15 | 30 |
+| v12 | `token_state_loss`'s `vel_weight` 0.1->1.0 | 6.27 | 27 |
+
+All three are flat-to-worse on position error and *categorically*
+worse on dropout count -- not noise, 1.7x to 5x more vanishing tokens
+than baseline in every case. Per this project's own
+systematic-debugging discipline (`superpowers:systematic-debugging`):
+3+ fix attempts at the same symptom, each revealing the same failure
+in a different place rather than closing it, is the signal to stop
+patching and question the architecture/objective itself, not attempt
+a 4th minor variant. Stopping here rather than launching a v13.
+
+**What's now conclusively ruled out**: v9's checkpoint being
+undertrained (v11 -- more training makes it worse); the specific
+mechanism of an explicit, blended velocity correction, whether spliced
+on at inference (earlier tonight, also negative) or trained in from
+the start (v10); and naively reweighting the existing loss to
+penalize velocity error harder (v12). None of these are "didn't help
+enough" -- all three measurably increased dropout relative to
+baseline, which is a real, reproducible direction, not sampling noise.
+
+**What remains genuinely untested, and is the most promising next
+direction**: the reframing already noted above and in
+[[project_token_per_ball_model_status]] -- that give-up dropout may be
+a real local optimum of `token_state_loss` + self-feed, not a failure
+to reach a better one. Nothing in the current loss ever looks at
+`window_total`/detection strength; a token can drift its
+`centroid_near` window empty and the training signal has no way to
+distinguish "recoverable drift" from "acceptable to abandon." Two
+concrete, not-yet-tried directions that follow from that: (a) an
+explicit loss penalty when a token's own `window_total` collapses
+toward zero, so vanishing is never free regardless of what it does to
+state-space MSE; (b) treating token permanence as structural rather
+than emergent -- e.g. hard-constraining `centroid_near`'s widened
+search to never fully give up (no "return position unchanged" branch)
+so there is no absorbing state for training to discover as a shortcut
+in the first place. Both are more invasive than tonight's A/Bs (loss
+function redesign vs. hyperparameter/mechanism swap) and are exactly
+the kind of change that deserves a human decision before spending more
+GPU-hours chasing it -- flagging here rather than guessing which one
+to build unattended.
