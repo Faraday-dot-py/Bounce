@@ -129,14 +129,24 @@ def main():
                 frame1_nn_dist_by_ball.setdefault(ball, []).append(episode_nn[t])
 
         num_tokens = positions.shape[0]
-        trace = {t: [] for t in range(num_tokens)}  # (step, window_total, occluding)
+        trace = {t: [] for t in range(num_tokens)}  # (step, window_total, occluding, gt_err, nearest_ball, nearest_err)
         observed = g1
         with torch.no_grad():
             for step in range(args.num_steps - 1):
                 occ = occluding_mask(positions, model._gate_radius())
+                gt_state = states[step + 1]
+                gt_pos = torch.stack([
+                    torch.tensor(gt_state["x"], dtype=torch.float32),
+                    torch.tensor(gt_state["y"], dtype=torch.float32),
+                ], dim=1)
                 for t in range(num_tokens):
                     wt = window_total_at(observed[0], positions[t], model.radius, model.detect_margin)
-                    trace[t].append((step, wt, bool(occ[t])))
+                    ball = int(token_to_ball[t])
+                    gt_err = float(torch.norm(positions[t] - gt_pos[ball]))
+                    all_err = torch.norm(gt_pos - positions[t].unsqueeze(0), dim=1)
+                    nearest_ball = int(all_err.argmin())
+                    nearest_err = float(all_err[nearest_ball])
+                    trace[t].append((step, wt, bool(occ[t]), gt_err, nearest_ball, nearest_err))
                 positions, velocities, hidden, pred_grid = model.step(positions, velocities, hidden, observed)
                 observed = pred_grid
         last_peak = [peak_prob_at(observed[0], positions[t]) for t in range(positions.shape[0])]
@@ -150,10 +160,11 @@ def main():
                 rank_at_dropout.append((peak_order.index(t), nn_order.index(t), positions.shape[0]))
                 if args.trace:
                     print(f"\n--- trace: seed {seed}, ball {ball} (token {t}), frame1 peak={episode_peaks[t]:.4f} ---")
-                    for step, wt, occ in trace[t]:
+                    for step, wt, occ, gt_err, nearest_ball, nearest_err in trace[t]:
                         bail = "BAILOUT" if wt <= 1e-6 else ""
                         occ_str = "occluded" if occ else ""
-                        print(f"  step {step:2d}: window_total={wt:.4f} {occ_str} {bail}")
+                        swap = f"SWAP->ball{nearest_ball}(err={nearest_err:.2f})" if nearest_ball != ball and nearest_err < gt_err else ""
+                        print(f"  step {step:2d}: window_total={wt:.4f} gt_err={gt_err:.3f} {occ_str} {bail} {swap}")
 
     print(f"=== dropout events (peak < {args.dropout_threshold} at step {args.num_steps - 1}) ===")
     for seed, ball in dropout_ball_idx:

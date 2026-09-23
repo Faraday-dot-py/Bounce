@@ -1268,3 +1268,43 @@ the decline precedes and causes the bailout, not the reverse. Next:
 prototype softening the bailout (progressively widen the search window
 on decline, or drop the hard cutoff for a soft distance-weighted
 fallback) rather than the current all-or-nothing threshold.
+
+**Widened-search fallback implemented (`model/token_detect.py`,
+`centroid_near`)**: on an empty window, retries with the search radius
+grown by `ceil(radius)` per attempt (up to 3 expansions, capped
+deliberately -- unbounded widening risks latching onto a different
+ball's mass instead of recovering the token's own, worse than staying
+lost). 89/89 tests pass unchanged (existing off-grid/empty-window
+tests still hold: the widened window never reaches far enough to
+contaminate those cases).
+
+**Result on v9 checkpoint (no retrain, same 48-seed diagnostic,
+`--trace` extended with ground-truth position error + swap
+detection)**: dropout events drop 11 -> 8. But the trace reveals two
+distinct mechanisms bundled under "give-up dropout", not one:
+
+1. **Genuine recoverable bailout** (3 of 11 fixed: seeds 4744, 4767,
+   one of the two 4773 events): position tracks ground truth closely
+   (gt_err ~1-2 cells) right up to the window emptying: exactly the
+   dead-end this fix targets, and it works.
+2. **Dynamics divergence, untouched by this fix** (4/11 remaining:
+   seeds 4742, 4750, 4752, 4757): `gt_err` climbs to 6-19 cells over a
+   handful of steps *before* the window ever empties -- the position
+   estimate is already badly wrong for reasons that have nothing to do
+   with the observation window. Widening a search radius can't recover
+   a token whose predicted position is already 10+ cells from its
+   ball. The `SWAP->ballN` markers confirm these are real large
+   divergences (position ends up nearer a *different* ball than its
+   own), not swaps caused by the widening itself -- swaps only appear
+   after gt_err was already huge.
+
+**Read**: the bailout fix is real but addresses a minority of dropout
+events. The larger remaining cause is `TokenDynamics` producing
+`delta_pos` predictions that compound into double-digit-cell errors
+within a handful of self-fed steps, independent of detection/occlusion
+entirely. Next: investigate why `delta_pos` diverges this badly for
+specific tokens -- likely candidates are the radius-graph attention
+(`model/token_net.py`) losing a token once its predicted position
+drifts outside `neighbor_radius` of all others (no neighbors to
+attend to -> degenerate self-only update), or unconstrained
+per-step displacement with nothing bounding `delta_pos` magnitude.

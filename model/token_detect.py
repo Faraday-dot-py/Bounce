@@ -4,37 +4,51 @@ import torch
 import torch.nn.functional as F
 
 
-def centroid_near(prob, position, radius, margin=1.0):
+def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
     """Intensity-weighted centroid of `prob` (n, n) within a square window
     around `position` (x, y) -- refines a coarse detection (or a token's
     predicted position) into a sub-pixel observation. Differentiable in
     `prob`'s values (not in the window's location, which is derived from
-    a detached rounded position). Returns `position` unchanged if the
-    window has no mass, e.g. the predicted position and the true ball
-    have drifted further apart than the window covers."""
+    a detached rounded position).
+
+    If the base window (radius `ceil(radius + margin)`) has no mass, the
+    search widens by one cell per retry, up to `max_expansions` times,
+    before giving up and returning `position` unchanged -- a token whose
+    predicted position has drifted a few cells from its ball otherwise
+    hits a permanent dead end (see docs/debugging/experiment-log.md,
+    "Bailout confirmed directly": the un-widened version never recovers
+    once the base window goes empty). The widening is intentionally
+    modest, not unbounded: past a few cells it risks pulling in a
+    different ball's mass entirely (an identity swap) rather than
+    recovering the token's own ball, which is worse than staying lost."""
     n = prob.shape[0]
-    half = int(math.ceil(radius + margin))
     cx = int(round(float(position[0].detach())))
     cy = int(round(float(position[1].detach())))
-    # Bail out before clamping if the raw window misses the grid entirely:
-    # clamping an off-grid window can leave i_lo > i_hi, which both slices
-    # nonsense (negative indices wrap) and makes the arange below raise.
-    i_lo_raw, i_hi_raw = cx - half, cx + half
-    j_lo_raw, j_hi_raw = cy - half, cy + half
-    if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
-        return position
-    i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
-    j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
-    window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
-    total = window.sum()
-    if total <= 1e-6:
-        return position
+    step = max(1, int(math.ceil(radius)))
+    base_half = int(math.ceil(radius + margin))
+    for expansion in range(max_expansions + 1):
+        half = base_half + expansion * step
+        # Bail out before clamping if the raw window misses the grid
+        # entirely: clamping an off-grid window can leave i_lo > i_hi,
+        # which both slices nonsense (negative indices wrap) and makes
+        # the arange below raise.
+        i_lo_raw, i_hi_raw = cx - half, cx + half
+        j_lo_raw, j_hi_raw = cy - half, cy + half
+        if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+            continue
+        i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+        j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
+        window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
+        total = window.sum()
+        if total <= 1e-6:
+            continue
 
-    ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
-    jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
-    x = (window * ii).sum() / total
-    y = (window * jj).sum() / total
-    return torch.stack([x, y])
+        ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
+        jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
+        x = (window * ii).sum() / total
+        y = (window * jj).sum() / total
+        return torch.stack([x, y])
+    return position
 
 
 def find_token_positions(prob, radius, threshold=0.1):
