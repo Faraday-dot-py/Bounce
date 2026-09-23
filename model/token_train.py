@@ -19,7 +19,7 @@ def sampling_probability(epoch, ramp_epochs):
 def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16,
                         boundary_weight=0.1, boundary_margin=0.0,
-                        state_weight=1.0, grid_weight=0.1):
+                        state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -67,7 +67,7 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
         target_grid = grid_seq[step + 2]
         target_state = state_seq[step + 2]
         total_loss = total_loss + state_weight * token_state_loss(
-            positions, velocities, target_state, match_idx
+            positions, velocities, target_state, match_idx, vel_weight=state_vel_weight
         )
         total_loss = total_loss + grid_weight_effective * token_grid_loss(
             pred_grid, target_grid, source_grid, weights,
@@ -112,6 +112,7 @@ def train(args):
                 bg_weight=args.bg_weight, peak_weight=args.peak_weight,
                 boundary_weight=args.boundary_weight, boundary_margin=args.boundary_margin,
                 state_weight=args.state_weight, grid_weight=args.grid_weight,
+                state_vel_weight=args.state_vel_weight,
             )
             opt.zero_grad()
             loss.backward()
@@ -152,6 +153,15 @@ def main():
     ap.add_argument("--boundary-weight", type=float, default=0.1)
     ap.add_argument("--boundary-margin", type=float, default=0.0)
     ap.add_argument("--state-weight", type=float, default=1.0)
+    # token_state_loss's own vel_weight (model/token_losses.py) -- how much
+    # the direct state-space loss penalizes velocity error relative to
+    # position. Raised from the project default (0.1) is a direct,
+    # measurement-motivated test (not blind tuning): 2026-09-23's
+    # scripts/measure_error_compounding.py showed self-fed VELOCITY error
+    # growing ~5x faster than position error and driving it, but the loss
+    # that's supposed to teach the network to track velocity barely
+    # penalizes getting it wrong.
+    ap.add_argument("--state-vel-weight", type=float, default=0.1)
     # Weight token_grid_loss ramps to (from 0) over the same sampling_p
     # schedule as self-feed -- see token_rollout_loss's docstring.
     ap.add_argument("--grid-weight", type=float, default=0.1)
