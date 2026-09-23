@@ -180,11 +180,51 @@ def test_centroid_near_default_unaffected_by_territory_params_when_absent():
     assert torch.equal(baseline, with_none)
 
 
-def test_centroid_near_still_gives_up_when_own_territory_is_empty():
-    # A token whose territory contains no mass at all must still fall
-    # through to the give-up return, same as the unmasked case.
+def test_centroid_near_still_gives_up_when_no_mass_anywhere():
+    # A token whose window (masked or not) contains no mass at all,
+    # anywhere in the grid, must still fall through to the give-up
+    # return -- the unmasked fallback (see the next test) only helps
+    # when there IS mass somewhere, just not in this token's own
+    # territory.
     prob = torch.zeros((20, 20))
     positions = torch.tensor([[5.0, 5.0], [15.0, 15.0]])
     result = centroid_near(prob, positions[0], radius=0.75,
                             all_positions=positions, self_idx=0)
     assert torch.equal(result, positions[0])
+
+
+def test_centroid_near_falls_back_to_unmasked_when_own_territory_is_totally_empty():
+    # Token 0's own ball has genuinely vanished from the frame (e.g. it
+    # fell off-grid under self-feed) -- unlike
+    # test_centroid_near_ignores_neighbour_mass_when_territory_given,
+    # there is no mass anywhere in token 0's own territory at any window
+    # size, only in token 1's. Per docs/debugging/experiment-log.md's v14
+    # finding (final review), a hard mask with no fallback leaves a token
+    # permanently lost once its own rendered mass fully leaves its
+    # territory -- staying lost forever is worse than an occasional
+    # wrong-neighbour correction, so this must recover via an unmasked
+    # retry rather than give up.
+    balls = [{"x": 13.0, "y": 10.0, "vx": 0.0, "vy": 0.0}]
+    prob = _prob_channel(balls, 20, 0.75)
+    positions = torch.tensor([[9.0, 10.0], [13.0, 10.0]])
+
+    result = centroid_near(prob, positions[0], radius=0.75, margin=1.0, max_expansions=6,
+                            all_positions=positions, self_idx=0)
+    assert torch.allclose(result, torch.tensor([13.0, 10.0]), atol=0.5)
+
+
+def test_centroid_near_still_masks_when_own_territory_has_some_mass():
+    # Token 0 has its own ball within its own territory -- masking must
+    # still apply here (this is the case masking exists to protect: a
+    # token that CAN find its own ball must not lose it to a nearby
+    # neighbour, even though the fallback above now exists for the
+    # totally-empty case).
+    balls = [
+        {"x": 8.0, "y": 10.0, "vx": 0.0, "vy": 0.0},
+        {"x": 12.0, "y": 10.0, "vx": 0.0, "vy": 0.0},
+    ]
+    prob = _prob_channel(balls, 20, 1.5)
+    positions = torch.tensor([[8.0, 10.0], [12.0, 10.0]])
+    result = centroid_near(prob, positions[0], radius=1.5, margin=3.0,
+                            all_positions=positions, self_idx=0)
+    assert torch.allclose(result, torch.tensor([8.0, 10.0]), atol=0.3)

@@ -53,7 +53,8 @@ class TokenModel(torch.nn.Module):
 
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
-                 max_init_speed=20.0, velocity_weight=0.0, max_expansions=6):
+                 max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
+                 territory_masking=False):
         super().__init__()
         self.n = n
         self.radius = radius
@@ -61,13 +62,27 @@ class TokenModel(torch.nn.Module):
         self.detect_threshold = detect_threshold
         self.observation_weight = observation_weight
         # Give-up search width for centroid_near's per-step observation
-        # read. Raised from centroid_near's own default (3) now that
-        # territory masking (see model.token_detect.territory_mask) makes
-        # a wider search structurally safe -- it can no longer cross into
-        # a neighbouring token's territory and steal its mass, which is
-        # what made widening this unsafe before (see
-        # docs/superpowers/specs/2026-09-23-token-territory-masking-design.md).
+        # read. Raised from centroid_near's own default (3) -- this helps
+        # independent of territory_masking below (a wider unmasked search
+        # also recovers more drifted tokens; see
+        # docs/debugging/experiment-log.md's v14 final review, which
+        # measured this directly: widening alone, with no masking, cut
+        # dropout on both the v9 and v14 checkpoints).
         self.max_expansions = max_expansions
+        # Opt-in per-token observation-window exclusivity (see
+        # model.token_detect.territory_mask). Defaults to False so
+        # existing checkpoints -- trained and previously evaluated without
+        # it -- get byte-for-byte the same inference they always had;
+        # turning this on by default silently changed v9's own measured
+        # dropout count (6 -> 8) even though v9 was never trained with it
+        # (docs/debugging/experiment-log.md's v14 final review). Pass True
+        # to enable it for a model trained with it from the start.
+        # centroid_near's masked search falls back to an unmasked retry
+        # when a token's own territory is completely empty, so enabling
+        # this does not reintroduce the permanent-loss regression found
+        # in the first (fallback-less) version of this design -- see
+        # centroid_near's own docstring.
+        self.territory_masking = territory_masking
         # Explicit velocity re-anchoring: finite-difference of two
         # consecutive observation reads (centroid_near), same idea
         # init_tokens already uses across frame0/frame1, just applied every
@@ -195,7 +210,8 @@ class TokenModel(torch.nn.Module):
                 continue
             op = centroid_near(observed_frame[0], positions[i], self.radius,
                                 margin=self.detect_margin, max_expansions=self.max_expansions,
-                                all_positions=positions, self_idx=i)
+                                all_positions=positions if self.territory_masking else None,
+                                self_idx=i if self.territory_masking else None)
             obs_pos[i] = op
             corrected_pos[i] = (1 - w) * positions[i] + w * op
             if prev_obs_pos is not None and vw > 0.0:

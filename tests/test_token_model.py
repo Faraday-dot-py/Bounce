@@ -228,38 +228,83 @@ def test_assign_velocity_pairs_keeps_unambiguous_match():
     assert bool(keep[0])
 
 
-def test_step_observation_does_not_steal_neighbours_mass():
-    # Two non-occluding tokens: TokenModel's actual occlusion threshold is
-    # 2*_gate_radius() = 2*(radius + detect_margin) = 2*(0.75+1.0) = 3.5,
-    # not 2*radius -- these two are 4.0 apart, clear of that gate. But
-    # centroid_near's un-widened window (base_half=ceil(radius+margin)=2,
-    # +1/expansion up to max_expansions=3 -> reaches half=5) still spans
-    # far enough to overlap without territory masking. Token 0's tracked
-    # position has drifted off its own (now-empty) ball; without masking
-    # it would pull in token 1's real mass and "correct" onto it. With
-    # masking, it must stay put (give up) instead of moving onto token 1's
-    # ball.
+def test_territory_masking_defaults_to_off():
+    # Masking must be opt-in: TokenModel() with no explicit
+    # territory_masking must reproduce pre-fix inference behavior exactly
+    # (see docs/debugging/experiment-log.md's v14 final review -- turning
+    # masking on by default silently changed inference for every existing
+    # checkpoint, e.g. v9's own dropout count 6 -> 8, even though those
+    # checkpoints were trained without it).
+    model = TokenModel(n=20, radius=0.75, dt=0.15)
+    assert model.territory_masking is False
+
+
+def test_step_steals_neighbours_mass_by_default_when_own_mass_is_gone():
+    # Reproduces the pre-fix (and now default, territory_masking=False)
+    # behavior directly: with masking off, an unmasked widened search
+    # still grabs a nearby token's mass when this token's own ball has
+    # vanished from the frame -- this is the "theft" v13/v14 were about,
+    # but it is also the ONLY recovery path an unmasked model has, which
+    # is exactly why it must remain the default (see
+    # test_step_territory_masking_falls_back_when_own_mass_is_gone for
+    # the masked-but-still-recovers version).
     torch.manual_seed(4738)
     n, radius, dt = 20, 0.75, 0.15
     model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    assert model.territory_masking is False
     positions = torch.tensor([[9.0, 10.0], [13.0, 10.0]])  # 4.0 apart -> not occluding (threshold 3.5)
     velocities = torch.zeros(2, 2)
     hidden = torch.zeros(2, model.dynamics.hidden_dim)
-    # Ground truth: token 0's ball has actually moved away/vanished from
-    # this frame; only token 1's ball is present, at its tracked position.
     observed_frame = rasterize_tokens(torch.tensor([[13.0, 10.0]]), torch.zeros(1, 2), n, radius)
 
-    new_pos, _, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+    _, _, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame)
 
-    # Token 0 must NOT have been pulled toward token 1's mass.
-    assert torch.norm(obs_pos[0] - positions[0]) < 0.1
-    assert torch.norm(new_pos[0] - torch.tensor([13.0, 10.0])) > 1.0
+    assert torch.allclose(obs_pos[0], torch.tensor([13.0, 10.0]), atol=0.5)
+
+
+def test_step_territory_masking_prevents_theft_when_own_mass_exists():
+    # With territory_masking=True and token 0's own ball actually present
+    # (not vanished), masking must still block a nearby token's mass from
+    # being read -- the fallback only engages when a token's own
+    # territory is completely empty (see
+    # test_centroid_near_still_masks_when_own_territory_has_some_mass for
+    # the centroid_near-level version of this same property).
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0, territory_masking=True)
+    positions = torch.tensor([[8.0, 10.0], [12.0, 10.0]])  # 4.0 apart -> not occluding (threshold 5.0)
+    velocities = torch.zeros(2, 2)
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(positions, torch.zeros(2, 2), n, radius)
+
+    _, _, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+
+    assert torch.allclose(obs_pos[0], torch.tensor([8.0, 10.0]), atol=0.3)
+
+
+def test_step_territory_masking_falls_back_when_own_mass_is_gone():
+    # With territory_masking=True but token 0's own ball genuinely
+    # vanished from the frame, the fix (unmasked fallback in
+    # centroid_near) must still recover it via token 1's mass, exactly
+    # like the default-off case -- masking must not reintroduce
+    # permanent loss for a token with nothing of its own left to find.
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0, territory_masking=True)
+    positions = torch.tensor([[9.0, 10.0], [13.0, 10.0]])
+    velocities = torch.zeros(2, 2)
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(torch.tensor([[13.0, 10.0]]), torch.zeros(1, 2), n, radius)
+
+    _, _, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+
+    assert torch.allclose(obs_pos[0], torch.tensor([13.0, 10.0]), atol=0.5)
 
 
 def test_occluding_tokens_still_ignore_observation_with_territory_masking():
     torch.manual_seed(4738)
     n, radius, dt = 20, 0.75, 0.15
-    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0, territory_masking=True)
     positions = torch.tensor([[10.0, 10.0], [10.6, 10.0]])
     velocities = torch.zeros(2, 2)
     hidden = torch.zeros(2, model.dynamics.hidden_dim)
