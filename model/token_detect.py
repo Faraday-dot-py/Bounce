@@ -31,7 +31,8 @@ def territory_mask(ii, jj, positions, self_idx):
     return mask
 
 
-def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
+def centroid_near(prob, position, radius, margin=1.0, max_expansions=3,
+                   all_positions=None, self_idx=None):
     """Intensity-weighted centroid of `prob` (n, n) within a square window
     around `position` (x, y) -- refines a coarse detection (or a token's
     predicted position) into a sub-pixel observation. Differentiable in
@@ -47,7 +48,16 @@ def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
     once the base window goes empty). The widening is intentionally
     modest, not unbounded: past a few cells it risks pulling in a
     different ball's mass entirely (an identity swap) rather than
-    recovering the token's own ball, which is worse than staying lost."""
+    recovering the token's own ball, which is worse than staying lost.
+
+    When `all_positions` (all currently-tracked token positions) and
+    `self_idx` (this token's row in that tensor) are both given, window
+    mass outside this token's territory (see `territory_mask`) is
+    excluded before computing the centroid -- a token's window can never
+    read a cell that rightfully belongs to a different tracked token.
+    Both default to None, which reproduces the prior unmasked behavior
+    exactly (only `find_token_positions`, called before any persistent
+    tokens exist, relies on this default)."""
     n = prob.shape[0]
     cx = int(round(float(position[0].detach())))
     cy = int(round(float(position[1].detach())))
@@ -66,12 +76,20 @@ def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
         i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
         j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
         window = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
+
+        ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
+        jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
+
+        if all_positions is not None and self_idx is not None:
+            ii_grid = ii.expand(window.shape[0], window.shape[1])
+            jj_grid = jj.expand(window.shape[0], window.shape[1])
+            mask = territory_mask(ii_grid, jj_grid, all_positions, self_idx)
+            window = window * mask.to(window.dtype)
+
         total = window.sum()
         if total <= 1e-6:
             continue
 
-        ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
-        jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
         x = (window * ii).sum() / total
         y = (window * jj).sum() / total
         return torch.stack([x, y])

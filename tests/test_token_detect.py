@@ -150,3 +150,41 @@ def test_territory_mask_handles_coincident_tokens():
     mask1 = territory_mask(ii, jj, positions, self_idx=1)
     assert bool(mask0[0, 0])
     assert bool(mask1[0, 0])
+
+
+def test_centroid_near_ignores_neighbour_mass_when_territory_given():
+    # Two balls close enough that an unmasked window would pull in both;
+    # with all_positions/self_idx set, each token's centroid must land
+    # near its own ball only.
+    balls = [
+        {"x": 8.0, "y": 10.0, "vx": 0.0, "vy": 0.0},
+        {"x": 12.0, "y": 10.0, "vx": 0.0, "vy": 0.0},
+    ]
+    prob = _prob_channel(balls, 20, 1.5)
+    positions = torch.tensor([[8.0, 10.0], [12.0, 10.0]])
+
+    result0 = centroid_near(prob, positions[0], radius=1.5, margin=3.0,
+                             all_positions=positions, self_idx=0)
+    result1 = centroid_near(prob, positions[1], radius=1.5, margin=3.0,
+                             all_positions=positions, self_idx=1)
+    assert torch.allclose(result0, torch.tensor([8.0, 10.0]), atol=0.3)
+    assert torch.allclose(result1, torch.tensor([12.0, 10.0]), atol=0.3)
+
+
+def test_centroid_near_default_unaffected_by_territory_params_when_absent():
+    balls = [{"x": 10.5, "y": 7.5, "vx": 0.0, "vy": 0.0}]
+    prob = _prob_channel(balls, 20, 0.75)
+    pos = torch.tensor([10.0, 7.0])
+    baseline = centroid_near(prob, pos, radius=0.75)
+    with_none = centroid_near(prob, pos, radius=0.75, all_positions=None, self_idx=None)
+    assert torch.equal(baseline, with_none)
+
+
+def test_centroid_near_still_gives_up_when_own_territory_is_empty():
+    # A token whose territory contains no mass at all must still fall
+    # through to the give-up return, same as the unmasked case.
+    prob = torch.zeros((20, 20))
+    positions = torch.tensor([[5.0, 5.0], [15.0, 15.0]])
+    result = centroid_near(prob, positions[0], radius=0.75,
+                            all_positions=positions, self_idx=0)
+    assert torch.equal(result, positions[0])
