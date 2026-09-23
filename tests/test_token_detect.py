@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 import bounce
-from model.token_detect import centroid_near, find_token_positions
+from model.token_detect import centroid_near, find_token_positions, territory_mask
 
 
 def _prob_channel(balls, n, radius):
@@ -102,3 +102,51 @@ def test_centroid_near_returns_position_for_far_off_grid_query():
     for coords in ([-50.0, -50.0], [-21.0, -21.0], [500.0, 500.0], [-21.0, 500.0]):
         pos = torch.tensor(coords)
         assert torch.equal(centroid_near(prob, pos, radius=0.75), pos)
+
+
+def test_territory_mask_splits_window_at_midline():
+    # Two tokens 4 cells apart on the x-axis; a window spanning both must
+    # be split down the middle, each token owning its own half.
+    ii = torch.arange(0, 10, dtype=torch.float32).view(-1, 1).expand(10, 1)
+    jj = torch.zeros(10, 1)
+    positions = torch.tensor([[3.0, 0.0], [7.0, 0.0]])
+    mask0 = territory_mask(ii, jj, positions, self_idx=0)
+    mask1 = territory_mask(ii, jj, positions, self_idx=1)
+    # cell x=4 is closer to token 0 (dist 1) than token 1 (dist 3)
+    assert bool(mask0[4, 0])
+    assert not bool(mask1[4, 0])
+    # cell x=6 is closer to token 1 (dist 1) than token 0 (dist 3)
+    assert bool(mask1[6, 0])
+    assert not bool(mask0[6, 0])
+
+
+def test_territory_mask_no_op_for_single_token():
+    ii = torch.arange(0, 5, dtype=torch.float32).view(-1, 1).expand(5, 1)
+    jj = torch.zeros(5, 1)
+    positions = torch.tensor([[2.0, 0.0]])
+    mask = territory_mask(ii, jj, positions, self_idx=0)
+    assert bool(mask.all())
+
+
+def test_territory_mask_ties_favor_self():
+    # Cell exactly equidistant from both tokens (x=5, tokens at x=3 and
+    # x=7) must belong to whichever token's mask is being computed.
+    ii = torch.tensor([[5.0]])
+    jj = torch.tensor([[0.0]])
+    positions = torch.tensor([[3.0, 0.0], [7.0, 0.0]])
+    mask0 = territory_mask(ii, jj, positions, self_idx=0)
+    mask1 = territory_mask(ii, jj, positions, self_idx=1)
+    assert bool(mask0[0, 0])
+    assert bool(mask1[0, 0])
+
+
+def test_territory_mask_handles_coincident_tokens():
+    # Two tokens at the exact same position -- degenerate but must not
+    # produce an all-False mask for either.
+    ii = torch.tensor([[5.0]])
+    jj = torch.tensor([[5.0]])
+    positions = torch.tensor([[5.0, 5.0], [5.0, 5.0]])
+    mask0 = territory_mask(ii, jj, positions, self_idx=0)
+    mask1 = territory_mask(ii, jj, positions, self_idx=1)
+    assert bool(mask0[0, 0])
+    assert bool(mask1[0, 0])

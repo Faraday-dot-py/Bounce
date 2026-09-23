@@ -6,6 +6,31 @@ import torch.nn.functional as F
 from model.token_gate import occluding_mask
 
 
+def territory_mask(ii, jj, positions, self_idx):
+    """Boolean mask, same shape as ii/jj (a window's per-cell coordinate
+    grids, broadcastable to (h, w)): True where a cell is at least as
+    close to positions[self_idx] as to every other row of positions --
+    a Voronoi partition over currently-tracked token positions. Ties
+    favor self_idx (a cell exactly equidistant from two tokens belongs
+    to both of their masks, never to neither), so the total masked area
+    across all tokens never has a gap. Distance is plain Euclidean in
+    grid-cell space; this is not derived from `radius` or any other
+    physical constant -- it only asks "which token is nearest," using
+    whatever positions are currently tracked.
+
+    See docs/superpowers/specs/2026-09-23-token-territory-masking-design.md."""
+    self_pos = positions[self_idx]
+    self_dist_sq = (ii - self_pos[0]) ** 2 + (jj - self_pos[1]) ** 2
+    mask = torch.ones_like(ii, dtype=torch.bool)
+    for k in range(positions.shape[0]):
+        if k == self_idx:
+            continue
+        other = positions[k]
+        other_dist_sq = (ii - other[0]) ** 2 + (jj - other[1]) ** 2
+        mask &= self_dist_sq <= other_dist_sq
+    return mask
+
+
 def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
     """Intensity-weighted centroid of `prob` (n, n) within a square window
     around `position` (x, y) -- refines a coarse detection (or a token's
