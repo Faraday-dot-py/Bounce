@@ -35,8 +35,9 @@ from model.token_match import match_tokens_to_state
 import random
 
 
-def load_model(checkpoint_path, n, hidden_dim, neighbor_radius):
-    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0):
+    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
+                        velocity_weight=velocity_weight)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -77,9 +78,10 @@ def main():
     ap.add_argument("--base-seed", type=int, default=4738)
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
+    ap.add_argument("--velocity-weight", type=float, default=0.0)
     args = ap.parse_args()
 
-    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius)
+    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight)
 
     tf_err = [[] for _ in range(args.num_steps - 1)]
     sf_err = [[] for _ in range(args.num_steps - 1)]
@@ -99,12 +101,13 @@ def main():
 
         # --- teacher-forced: reset pos/vel to ground truth every step ---
         positions, velocities, hidden = positions0.clone(), velocities0.clone(), hidden0.clone()
+        prev_obs_pos = positions0
         with torch.no_grad():
             for step in range(args.num_steps - 1):
                 gt_pos, gt_vel = gt_pos_vel(states[step + 1])
                 gt_pos, gt_vel = gt_pos[token_to_ball], gt_vel[token_to_ball]
                 observed = torch.from_numpy(frames[step + 1].transpose(2, 0, 1))
-                positions, velocities, hidden, _, _ = model.step(gt_pos, gt_vel, hidden, observed)
+                positions, velocities, hidden, _, prev_obs_pos = model.step(gt_pos, gt_vel, hidden, observed, prev_obs_pos)
                 gt_next, _ = gt_pos_vel(states[step + 2])
                 gt_next = gt_next[token_to_ball]
                 err = torch.norm(positions - gt_next, dim=1).mean().item()
@@ -113,9 +116,12 @@ def main():
         # --- self-fed: standard autoregressive rollout ---
         positions, velocities, hidden = positions0.clone(), velocities0.clone(), hidden0.clone()
         observed = g1
+        prev_obs_pos = positions0
         with torch.no_grad():
             for step in range(args.num_steps - 1):
-                positions, velocities, hidden, pred_grid, _ = model.step(positions, velocities, hidden, observed)
+                positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                    positions, velocities, hidden, observed, prev_obs_pos
+                )
                 observed = pred_grid
                 gt_next, gt_vel_next = gt_pos_vel(states[step + 2])
                 gt_next, gt_vel_next = gt_next[token_to_ball], gt_vel_next[token_to_ball]

@@ -1471,3 +1471,77 @@ question the session already flagged before these fixes started, and
 is not resolved by anything of this shape -- stopping the inference-
 time patch search here rather than continuing to chase a 6/48 tail
 that needs an actual dynamics/training change.
+
+## 2026-09-23 — where rollout error actually compounds: velocity, not position, and training a fix for it doesn't close the gap
+
+Direct instrumentation (`scripts/measure_error_compounding.py`, v9
+checkpoint, 48 seeds): compares teacher-forced (positions/velocities
+reset to ground truth every step before calling `model.step`) against
+standard self-fed rollout, same seeds, same model. Teacher-forced
+per-step position error stays flat and small (0.2-0.9 cells,
+non-growing) across all 19 steps -- one dynamics step, given a correct
+input, is essentially fine. Self-fed position error grows
+monotonically from 0.48 cells (step 0) to 5.9-6.0 cells by step
+10-11, then plateaus/slightly recedes. Self-fed **velocity** error
+grows even faster in relative terms: 1.70 cells/s (step 0) to 9.4
+cells/s (step 9), tracking the position-error curve's shape almost
+exactly. `TokenModel.step`'s own docstring already says velocity is
+"corrected only implicitly" (no per-step observation correction the
+way position gets one via `centroid_near`) -- this measurement
+confirms that asymmetry is load-bearing: velocity drifts hard under
+self-feed, and `final_pos = corrected_pos + velocities * dt +
+delta_pos` carries that drift straight into position every step.
+
+**Naive inference-only fix rejected by direct test.** Added a second,
+independent implementation of TokenModel.step
+(`scripts/probe_velocity_correction.py`) that re-anchors velocity each
+step via finite difference of two consecutive `centroid_near` reads
+(mirroring `init_tokens`' own frame0/frame1 approach, applied every
+step instead of only at init), spliced onto the frozen v9 checkpoint
+with no retraining. Result: monotonically **worse**, not better, at
+every velocity_weight tested (0.3/0.5/0.8/1.0) -- position error at
+step 16 goes from 5.36 (baseline) to 6.73 (weight=1.0). Read: the
+frozen dynamics network's `delta_vel` implicitly depends on velocity
+following its own learned internal trajectory; splicing in an
+external, noisier estimate is off-distribution for weights that were
+never trained to expect it.
+
+**Built the correction into the real architecture and retrained --
+still didn't help.** `model/token_model.py`'s `TokenModel.step` now
+takes this velocity correction as a first-class, opt-in parameter
+(`velocity_weight`, default 0.0, backward compatible -- 97/97 tests
+pass with the refactor). Trained job 2854 (`checkpoints/token_model_h12_v10.pt`):
+identical recipe to v9 (job 2852: state-loss-only ablation, 10k cache,
+3 epochs) with `velocity_weight=0.5` as the only change, so the
+dynamics network sees the correction from the start instead of having
+it spliced on afterward. Result on the same 48-seed diagnostic (v9 ->
+v10): self-fed position error curve is nearly unchanged (5.45 -> 5.22
+cells at step 9, 5.50 -> 5.55 at step 18 -- within seed-to-seed
+noise), and dropout count is actually worse (6 -> 10 events across 48
+seeds). Training the correction in, not just splicing it on, ruled
+out the "off-distribution" explanation for the earlier negative
+result, but the underlying fix still isn't there: this specific
+mechanism (explicit two-frame velocity re-anchoring) is not the answer
+to the compounding problem, at least not at this weight/this little
+training. Not yet separated: whether 0.5 is the wrong weight, whether
+gating it on occlusion the same way position is gated is too
+conservative here, or whether the real fix has to be architectural in
+a different way (e.g. the dynamics network needs velocity error fed
+back as an explicit residual/loss term rather than a blended
+correction, or the give-up/absorbing-state mechanism itself needs
+fixing directly rather than trying to prevent the drift that leads to
+it).
+
+**Also running: job 2855 (`checkpoints/token_model_h12_v11.pt`),
+`velocity_weight=0.0` (v9's own recipe) but epochs 3 -> 15,
+ramp_epochs 2 -> 10** -- tests a separate, previously untested
+confound: v6-v9's "large dataset, few epochs" recipe was an explicit,
+never-validated deviation from the project's own default training
+budget (`docs/debugging/experiment-log.md`'s job 2846/2847 entry:
+"applied the user's LLM-pretraining-style intuition... since no
+grokking signal had been observed to justify heavy repetition"). 3
+epochs on 10k samples is 30k total gradient steps, fewer than the
+project default recipe's 2000 samples x 50 epochs = 100k -- the
+"confirmed architectural" conclusion in the 2026-09-22 entries above
+was drawn from a checkpoint trained on a third of the default's total
+updates. Result pending.
