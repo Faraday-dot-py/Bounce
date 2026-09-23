@@ -1441,3 +1441,33 @@ here looks like normal seed-to-seed variance in a 6/48 tail rather
 than a sign this fix didn't work -- worth re-running the full 48-seed
 sweep after the next fix to see if the trend resumes, rather than
 reading too much into one flat step.
+
+**Diagnostic tool itself was stale, fixed
+(`scripts/diagnose_token_dropout.py`, `window_total_at`)**: it only
+ever read the *base* (un-widened) window, so every `BAILOUT` label in
+the trace output since the centroid_near widening fix (two commits
+back) was potentially a false positive -- the real `centroid_near`
+call the model uses tries up to 3 widening expansions before actually
+giving up. Updated `window_total_at` to mirror that same widening loop
+so `BAILOUT` means what it says again.
+
+**Re-traced all 6 remaining dropout seeds with the corrected
+diagnostic**: all 6 are genuine bailouts even under the full widened
+search -- `window_total` declines gradually over several steps (never
+a sudden jump) before settling at exactly 0.0 and staying there for
+the rest of the rollout, the same absorbing-state shape documented
+in the original "Bailout confirmed directly" entry, just now a
+smaller residual set after tonight's fixes removed the init-time
+contributions (bad velocity, tied/hijacked peaks) that were inflating
+it. This matches, not contradicts, job 2851/2852's conclusion: a
+loss-based fix (state-space loss) didn't resolve this gradual-decline
+mechanism in practice, because the actual defect is in how
+`TokenDynamics` + the observation correction jointly track a token
+once its predicted position starts drifting, not something an
+inference-time detection/matching patch can reach. Three real,
+independently-verified bugs were fixed tonight (11 -> 6 dropout
+events across 48 seeds); this residual is the same open architectural
+question the session already flagged before these fixes started, and
+is not resolved by anything of this shape -- stopping the inference-
+time patch search here rather than continuing to chase a 6/48 tail
+that needs an actual dynamics/training change.

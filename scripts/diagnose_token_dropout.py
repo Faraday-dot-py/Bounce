@@ -62,22 +62,33 @@ def peak_prob_at(prob, position, radius=0.75, margin=1.0):
     return float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].max())
 
 
-def window_total_at(prob, position, radius, margin):
-    """Same window centroid_near reads from, returning its raw mass sum --
-    this is exactly the `total` centroid_near checks against its 1e-6
-    bailout, so a trace of this value over steps shows precisely when (or
-    whether) that bailout fires for a given token."""
+def window_total_at(prob, position, radius, margin, max_expansions=3):
+    """Mirrors `centroid_near`'s own widened-search loop (base window plus
+    up to `max_expansions` growing retries) and returns the mass sum of
+    whichever window it would settle on -- 0.0 only if EVERY widened
+    attempt comes up empty, i.e. the real bailout condition post-fix.
+    Reporting just the base window's mass (the pre-widening behavior this
+    function used to have) mislabeled steps the real widened
+    `centroid_near` call recovers from as BAILOUT; see
+    docs/debugging/experiment-log.md."""
+    import math
     n = prob.shape[0]
-    half = int(np.ceil(radius + margin))
+    step = max(1, int(math.ceil(radius)))
+    base_half = int(np.ceil(radius + margin))
     cx = int(round(float(position[0])))
     cy = int(round(float(position[1])))
-    i_lo_raw, i_hi_raw = cx - half, cx + half
-    j_lo_raw, j_hi_raw = cy - half, cy + half
-    if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
-        return 0.0  # off-grid entirely: centroid_near's other early-return
-    i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
-    j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
-    return float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
+    for expansion in range(max_expansions + 1):
+        half = base_half + expansion * step
+        i_lo_raw, i_hi_raw = cx - half, cx + half
+        j_lo_raw, j_hi_raw = cy - half, cy + half
+        if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+            continue
+        i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+        j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
+        total = float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
+        if total > 1e-6:
+            return total
+    return 0.0
 
 
 def main():
