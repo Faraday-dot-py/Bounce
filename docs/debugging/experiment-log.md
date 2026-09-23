@@ -1200,3 +1200,46 @@ vanishes across multiple seeds/runs, and whether its rasterized PROB
 peak is measurably lower than its siblings' at frame 0. Video:
 `videos/token_model_v9_state_loss_only_rollout.mp4`, diagnostic grid:
 `videos/token_model_v9_diagnostic_grid.png`.
+
+**Detection-strength diagnostic (`scripts/diagnose_token_dropout.py`), v9
+checkpoint, 48 seeds, 4 balls, 20 steps.** Instruments the rollout
+directly (not just rendered video) to check the two open questions
+from job 2852: does the same ball index vanish across seeds, and is
+its frame-1 PROB peak measurably lower.
+
+**Same-index hypothesis rejected**: dropout is spread across all 4
+ball indices roughly evenly (0:2, 1:2, 2:3, 3:4 across 11 dropout
+events / 48 seeds) -- no fixed "weak" token. Aggregate frame-1 peak
+PROB by index is also flat (0.39-0.42 across all four), so there's no
+structural per-index detection weakness either.
+
+**Episode-relative peak rank is the real signal**: ranking each
+episode's own tokens by frame-1 PROB peak, 6/11 dropout events are the
+single *lowest*-peak token in that episode, and the mean rank across
+all 11 is 1.09 (out of 0-3) vs. 1.5 expected under no effect --
+whichever ball happens to be faintest at initialization in a given
+episode is the one likely to disappear later, even though no ball is
+intrinsically faintest across episodes. This matches the "faintest
+ball first" read from job 2852's video review, but sharpens it: it's
+about relative signal strength within an episode, not ball identity.
+
+**Occlusion-gate hypothesis rejected**: within-episode nearest-neighbor
+rank shows the *opposite* of what the occlusion theory predicts --
+dropped tokens skew toward the *most isolated* token (nn_rank 2-3 out
+of 3 most often), not the most contact-prone. `occluding_mask`
+suppressing corrections near collisions is not what's causing this.
+
+**Read**: weaker initial sub-pixel localization (lower rasterized PROB
+peak → less precise `centroid_near` centroid at init) compounds under
+self-feed until the token's predicted position drifts far enough that
+`centroid_near`'s window goes empty (`total <= 1e-6` bailout in
+`model/token_detect.py`), after which the token runs on unstable
+`TokenDynamics` extrapolation alone with no way back. Points at the
+observation-correction path itself -- either the `centroid_near` bail
+condition (hard cutoff, no soft fallback/widening) or `TokenDynamics`
+lacking any way to recover a token once its observation is lost --
+rather than at loss weighting, which the last two ablations already
+ruled out. Not yet tried: widen or soften the bailout window when a
+token has drifted (re-detect from a larger search radius before giving
+up), or an explicit per-token confidence signal the observation branch
+could use instead of a hard threshold.
