@@ -108,7 +108,7 @@ def train(args):
     else:
         dataset = BounceTokenSequenceDataset(
             num_samples=args.num_samples, n=args.n, ball_range=(args.min_balls, args.max_balls),
-            seed=args.seed, horizon=args.horizon,
+            seed=args.seed, horizon=args.horizon, gravity=args.gravity,
         )
     loader = DataLoader(dataset, batch_size=None, shuffle=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -153,6 +153,7 @@ def main():
     ap.add_argument("--min-balls", type=int, default=2)
     ap.add_argument("--max-balls", type=int, default=6)
     ap.add_argument("--horizon", type=int, default=3)
+    ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--ramp-epochs", type=int, default=25)
     ap.add_argument("--lr", type=float, default=1e-3)
