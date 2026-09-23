@@ -134,6 +134,7 @@ def main():
     ap.add_argument("--territory-masking", action="store_true",
                      help="evaluate the checkpoint with territory masking enabled -- must match "
                           "how it was trained (--territory-masking in token_train.py)")
+    ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
     ap.add_argument("--trace", action="store_true",
                      help="print per-step window_total/occlusion for each dropped token")
@@ -148,7 +149,7 @@ def main():
     rank_at_dropout = []  # (peak_rank, nn_rank) of the dropped token within its own episode, 0=lowest
 
     for seed in range(args.base_seed, args.base_seed + args.num_seeds):
-        frames, states = simulate(args.n, args.num_balls, seed, args.num_steps)
+        frames, states = simulate(args.n, args.num_balls, seed, args.num_steps, gravity=args.gravity)
         g0 = torch.from_numpy(frames[0].transpose(2, 0, 1))
         g1 = torch.from_numpy(frames[1].transpose(2, 0, 1))
 

@@ -73,12 +73,13 @@ if __name__ == "__main__":
     ap.add_argument("--neighbor-radius", type=float, default=3.0)
     ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--territory-masking", action="store_true")
+    ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight,
                         territory_masking=args.territory_masking)
-    gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, args.num_steps)
+    gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, args.num_steps, gravity=args.gravity)
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], args.num_steps)
 
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))

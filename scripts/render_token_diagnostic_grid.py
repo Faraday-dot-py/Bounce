@@ -64,12 +64,13 @@ if __name__ == "__main__":
     ap.add_argument("--neighbor-radius", type=float, default=3.0)
     ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--territory-masking", action="store_true")
+    ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--out", type=str, default="/tmp/token_artifact_grid.png")
     args = ap.parse_args()
 
     num_steps = max(args.steps)
-    gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, num_steps)
+    gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, num_steps, gravity=args.gravity)
 
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
                         neighbor_radius=args.neighbor_radius, velocity_weight=args.velocity_weight,
