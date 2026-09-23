@@ -1,3 +1,5 @@
+import torch
+
 from model.losses import occupancy_weighted_mse
 
 
@@ -35,3 +37,19 @@ def token_grid_loss(pred_grid, target_grid, source_grid, weights, bg_weight=0.05
         weights, bg_weight=bg_weight, peak_weight=peak_weight,
         mass_weight=mass_weight, mass_tile=mass_tile,
     )
+
+
+def boundary_loss(positions, n, margin=0.0):
+    """Penalizes token positions outside [margin, n - margin) on either
+    axis. token_grid_loss only sees the rasterized grid, so it can only
+    react to a token vanishing off-grid after the fact; this operates on
+    the tracked (x, y) positions themselves (model.token_model.TokenModel.step's
+    `final_pos`), the same quantity that actually drifts, so it fires the
+    moment a token starts leaving rather than once it's already gone.
+
+    Grows quadratically with distance past the boundary, zero otherwise --
+    same shape as occupancy_weighted_mse's peak/mass terms, so it composes
+    the same way as an additive penalty."""
+    lower = torch.relu(margin - positions)
+    upper = torch.relu(positions - (n - margin))
+    return (lower ** 2 + upper ** 2).mean()

@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 
 from model.token_dataset import BounceTokenSequenceDataset, load_dataset_samples
 from model.token_model import TokenModel
-from model.token_losses import token_grid_loss
+from model.token_losses import boundary_loss, token_grid_loss
 
 
 def sampling_probability(epoch, ramp_epochs):
@@ -16,7 +16,8 @@ def sampling_probability(epoch, ramp_epochs):
 
 
 def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
-                        bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16):
+                        bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16,
+                        boundary_weight=0.1, boundary_margin=0.0):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -30,7 +31,14 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
     not a plain per-pixel MSE -- a first real training run (job 2840)
     using plain MSE converged to an all-background "give up" solution,
     since predicting nothing scores better than a present-but-imperfect
-    ball under a loss that doesn't down-weight background."""
+    ball under a loss that doesn't down-weight background.
+
+    `boundary_loss` is added on top of that: even with peak_weight
+    penalizing vanishing intensity, job 2847 (peak_weight=0.5) still
+    showed tokens drifting off-grid and dissolving by step ~12-20. That
+    term only sees the rasterized grid, reacting after a token is
+    already gone; this operates on the tracked positions directly, at
+    every rollout step, not just the last one."""
     device = next(model.parameters()).device
     grid_seq = grid_seq.to(device)
     weights = weights.to(device)
@@ -48,6 +56,9 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
             pred_grid, target_grid, source_grid, weights,
             bg_weight=bg_weight, peak_weight=peak_weight,
             mass_weight=mass_weight, mass_tile=mass_tile,
+        )
+        total_loss = total_loss + boundary_weight * boundary_loss(
+            positions, model.n, margin=boundary_margin
         )
         self_feed = random.random() < sampling_p
         observed_frame = pred_grid.detach() if self_feed else target_grid
@@ -81,6 +92,7 @@ def train(args):
             loss = token_rollout_loss(
                 model, grid_seq, args.horizon, sampling_p, weights,
                 bg_weight=args.bg_weight, peak_weight=args.peak_weight,
+                boundary_weight=args.boundary_weight, boundary_margin=args.boundary_margin,
             )
             opt.zero_grad()
             loss.backward()
@@ -114,6 +126,8 @@ def main():
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
+    ap.add_argument("--boundary-weight", type=float, default=0.1)
+    ap.add_argument("--boundary-margin", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--checkpoint", type=str, default="checkpoint_token.pt")
     ap.add_argument("--log-every", type=int, default=100,

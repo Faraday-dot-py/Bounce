@@ -1,6 +1,6 @@
 import torch
 
-from model.token_losses import token_grid_loss
+from model.token_losses import boundary_loss, token_grid_loss
 
 
 def test_token_grid_loss_is_zero_for_identical_grids():
@@ -58,3 +58,50 @@ def test_token_grid_loss_give_up_prediction_is_not_free():
     loss_correct = token_grid_loss(correct_pred, target, source, weights)
     assert loss_give_up > loss_correct
     assert torch.allclose(loss_correct, torch.tensor(0.0), atol=1e-6)
+
+
+def test_boundary_loss_is_zero_for_in_range_positions():
+    n = 20
+    positions = torch.tensor([[5.0, 5.0], [0.0, 19.9], [10.0, 10.0]])
+    loss = boundary_loss(positions, n)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_boundary_loss_grows_with_distance_past_boundary():
+    n = 20
+    just_past = torch.tensor([[-0.5, 5.0]])
+    far_past = torch.tensor([[-5.0, 5.0]])
+    loss_just_past = boundary_loss(just_past, n)
+    loss_far_past = boundary_loss(far_past, n)
+    assert loss_just_past > 0
+    assert loss_far_past > loss_just_past
+
+
+def test_boundary_loss_penalizes_both_low_and_high_side():
+    n = 20
+    below = torch.tensor([[-3.0, 5.0]])
+    above = torch.tensor([[23.0, 5.0]])
+    loss_below = boundary_loss(below, n)
+    loss_above = boundary_loss(above, n)
+    assert loss_below > 0
+    assert loss_above > 0
+    assert torch.allclose(loss_below, loss_above, atol=1e-6)
+
+
+def test_boundary_loss_respects_margin():
+    n = 20
+    positions = torch.tensor([[1.0, 5.0]])
+    loss_no_margin = boundary_loss(positions, n, margin=0.0)
+    loss_with_margin = boundary_loss(positions, n, margin=2.0)
+    assert torch.allclose(loss_no_margin, torch.tensor(0.0), atol=1e-6)
+    assert loss_with_margin > 0
+
+
+def test_boundary_loss_gradient_flows_to_positions():
+    n = 20
+    positions = torch.tensor([[-3.0, 5.0]], requires_grad=True)
+    loss = boundary_loss(positions, n)
+    loss.backward()
+    assert positions.grad is not None
+    assert positions.grad[0, 0] != 0.0
+    assert positions.grad[0, 1] == 0.0
