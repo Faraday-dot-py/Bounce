@@ -1119,3 +1119,52 @@ predicted displacement (the stall's direct analog to `peak_weight`
 for vanishing), tuning `boundary_weight` down in case it's
 over-dominating and pinning tokens near their current position, or the
 still-untried `mass_weight`/structural-incentive options noted above.
+
+**State-space loss added (`token_state_loss`, `model/token_match.py`,
+8cbae15): direct per-token MSE against the dataset's exact ground-truth
+`(x, y, vx, vy)`, matched once at init instead of comparing rasterized
+grids -- the structural argument being that occupancy_weighted_mse's
+give-up shortcut only exists because it's grid-space (background to
+hide behind); a coordinate-space target has no such shortcut. Kept
+`token_grid_loss` as a smaller secondary term, ramped in from 0 on the
+existing `sampling_p` schedule per user direction.** Job 2850 crashed
+immediately (`state_seq` tensors left on CPU while positions were on
+CUDA -- `token_train.py` was discarding `state_seq` before this change
+and never needed to move it); fixed (939ffb2), resubmitted as job 2851
+(same recipe as 2849: 10k-sample cache, 3 epochs, `ramp_epochs=2`,
+`peak_weight=0.5`, `boundary_weight=0.1`, `state_weight=1.0`,
+`grid_weight=0.1`) → `checkpoints/token_model_h12_v8.pt`. Same
+recoverable NaN pattern as 2849 (a few isolated batches per epoch,
+weights unaffected) but worth noting `token_train.py`'s per-epoch
+`epoch_loss` accumulator has no reset like the windowed `running_loss`
+does, so one NaN batch permanently zeroes out that epoch's reported
+loss for the rest of training -- not fixed yet, doesn't affect the
+checkpoint, but makes per-epoch loss trend unreadable from the log.
+
+Diagnostic grid + unbiased subagent review (no hypothesis primed):
+early rollout (steps 0-5) tracks ground truth closely, including color
+and orientation, matching almost pixel-for-pixel through step 3. Late
+rollout (steps 8-20) diverges sharply -- by step 8 two of four objects
+are missing entirely from the model's frame; by step 12 the model
+shows overlapping/merged blobs plus a trailing streak while ground
+truth still has 4 clearly separated objects; by step 20 only one clear
+blob survives (plus a faint smear), and even that blob is
+desaturated/lower-contrast than ground truth. No checkerboard/banding.
+Net read: **this is job 2842's original give-up-to-vanishing pattern,
+not job 2849's motion-stall** -- the state-space loss did not
+structurally close the shortcut in practice, at least not at these
+weights/this little training (3 epochs, same as every run in this
+series). Video: `videos/token_model_v8_state_loss_rollout.mp4`,
+diagnostic grid: `videos/token_model_v8_diagnostic_grid.png`.
+
+Open question, not yet investigated: whether this is the state loss
+being underweighted relative to grid/boundary loss once `grid_weight`
+ramps up (by epoch 2, `sampling_p=1.0` so `grid_weight` is at full
+strength and self-feed is 100% -- errors compound during self-fed
+rollout regardless of which loss shaped training), the small
+`vel_weight=0.1` letting velocity error accumulate positional drift
+unchecked, or simply too few epochs/samples for the state signal to
+dominate the learned behavior yet. Not yet tried: a state-loss-only
+ablation (`grid_weight=0`, `boundary_weight=0`) to isolate whether
+`token_state_loss` alone actually prevents vanishing, before assuming
+the structural argument was wrong.
