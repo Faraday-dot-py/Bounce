@@ -1308,3 +1308,74 @@ specific tokens -- likely candidates are the radius-graph attention
 drifts outside `neighbor_radius` of all others (no neighbors to
 attend to -> degenerate self-only update), or unconstrained
 per-step displacement with nothing bounding `delta_pos` magnitude.
+
+**Both candidate hypotheses falsified by direct instrumentation**:
+traced `delta_pos`/`delta_vel` magnitude, radius-graph neighbor count,
+and hidden-state norm per step for all 4 "dynamics divergence" seeds
+(4742, 4750, 4752, 4757). `delta_pos` never exceeds ~0.5 cells/step --
+nowhere near the 6-19 cell errors observed, ruling out unbounded
+displacement. The "no neighbors -> degenerate" theory doesn't hold
+either: `TokenDynamics.forward` adds a self-loop unconditionally
+(`model/token_net.py:50-52`), so an isolated token (`nbrs=0`) still
+gets a normal self-attention update, not a broken one -- confirmed by
+reading the code directly, no ambiguity here.
+
+**Actual mechanism: bad velocity at `init_tokens`, not bad dynamics**.
+Comparing `init_tokens`' finite-difference velocity estimate against
+ground-truth velocity at frame 1 for the same 4 seeds shows large,
+confident errors that survive the existing `max_init_speed=20`
+rejection (which only catches literally-impossible speeds): e.g. seed
+4752 token0 estimated `[-4.97, -6.15]` vs. true `[2.41, -1.98]` --
+wrong in both magnitude and direction, but at ~7.9 cells/s, comfortably
+under the 20 cells/s cap. With `delta_pos`/`delta_vel` both small per
+step (confirmed above) and no explicit velocity-correction mechanism
+(by design, see `TokenModel.step`'s docstring -- job 2851 already
+showed adding one via loss doesn't fix this in practice), a bad initial
+velocity just dead-reckons forward almost unchanged, producing exactly
+the smooth, steady position-error growth seen in the trace (`window_total`
+stays healthy the whole time -- the observation branch is actively
+"correcting" every step, just not enough to counter a large constant
+velocity bias). This is confirmed directly: seeds with small init
+velocity error track cleanly to gt_err < 0.5 by step 18; seeds with
+large init velocity error are exactly the 4 that diverge.
+
+**Root cause of the bad velocity estimate**: `init_tokens` paired each
+frame-1 detection to its nearest frame-0 detection independently per
+row (plain `argmin`), with no uniqueness constraint. Two failure modes
+found directly in the data:
+1. **Duplicate match** (seed 4750): two frame-1 tokens both nearest-
+   matched to the *same* frame-0 detection (ball 1's true frame-0
+   position), leaving the other frame-0 detection (actually a second,
+   genuine peak from ball 1's own blob splitting into two under the
+   NMS window at close range -- a separate, undiagnosed peak-detection
+   bug, not yet fixed) unclaimed. One of the two duplicate tokens gets
+   a real velocity, the other whatever's left.
+2. **Near-tie ambiguity** (seed 4742, 4752, 4757): when two frame-0
+   balls are close together, a frame-1 ball's nearest frame-0 detection
+   can be a close call between its true predecessor and the other
+   ball's -- confirmed directly from the distance matrices (e.g. seed
+   4752: `[1.19, 1.31, ...]`, a ~10% margin), and independent per-row
+   argmin has no way to know it picked wrong.
+
+**Fix (`model/token_model.py`, `_assign_velocity_pairs`)**: replaced
+per-row `argmin` with an optimal one-to-one assignment (`scipy.optimize
+.linear_sum_assignment`, added to `requirements.txt`), which prevents
+mode 1 outright (two rows can no longer claim the same column). Added
+an explicit ambiguity check for mode 2: a row's assigned distance must
+beat its own next-best candidate distance by >= 0.5 cells, or the
+velocity is rejected (zeroed) the same way the existing
+`max_init_speed` check already does -- consistent with the file's own
+stated philosophy (zero is recoverable, confidently wrong is not).
+3 new unit tests on `_assign_velocity_pairs` plus one integration test
+on `init_tokens`; 93/93 tests pass.
+
+**Result on v9 checkpoint (no retrain, same 48-seed diagnostic)**:
+dropout events drop 8 -> 6 (11 -> 8 -> 6 across the two fixes so far).
+All 4 previously-traced "dynamics divergence" seeds' initial velocity
+estimates are now either correct or safely zeroed (no more
+confidently-wrong cases). The still-open duplicate-peak-detection bug
+noted in mode 1 above (`find_token_positions` producing 2-3 peaks for
+what should be one ball at close range, reproduced independently while
+writing this fix's test) is the most likely source of some remaining
+dropout events and is the next thing to investigate -- not yet
+root-caused or fixed.

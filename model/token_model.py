@@ -1,9 +1,49 @@
 import torch
+from scipy.optimize import linear_sum_assignment
 
 from model.token_net import TokenDynamics
 from model.token_detect import find_token_positions, centroid_near
 from model.token_gate import occluding_mask
 from model.token_rasterize import rasterize_tokens
+
+
+def _assign_velocity_pairs(dists, ambiguity_margin=0.5):
+    """One-to-one optimal assignment (Hungarian) between pos1 rows and
+    pos0 columns for velocity finite-differencing, replacing independent
+    per-row nearest-match: two tokens whose frame0 candidates are close
+    together can otherwise both claim the same frame0 detection under
+    plain argmin, leaving one frame0 ball with no partner and silently
+    producing a garbage velocity for whichever token loses the tie (see
+    docs/debugging/experiment-log.md, seed 4750 duplicate-match case).
+    When pos0 has fewer candidates than pos1, some rows go unmatched
+    (`nearest` is -1 for those).
+
+    Also flags a row as ambiguous when its assigned distance isn't at
+    least `ambiguity_margin` cells better than its own next-best
+    candidate distance: a near-tie in frame0 (two balls close together)
+    means the *chosen* member of the pair could easily be the wrong one
+    even under an optimal global assignment, and a confidently wrong
+    velocity compounds into large rollout drift (seed 4752/4742 cases)
+    -- an honest zero, recoverable by the dynamics network, is safer
+    than committing to a coin-flip pairing."""
+    n1, n0 = dists.shape
+    dists_np = dists.detach().cpu().numpy()
+    row_ind, col_ind = linear_sum_assignment(dists_np)
+    nearest = torch.full((n1,), -1, dtype=torch.long, device=dists.device)
+    nearest[torch.as_tensor(row_ind, device=dists.device)] = torch.as_tensor(col_ind, device=dists.device)
+
+    sorted_d, _ = torch.sort(dists, dim=1)
+    if n0 > 1:
+        second_best = sorted_d[:, 1]
+    else:
+        second_best = torch.full((n1,), float("inf"), dtype=dists.dtype, device=dists.device)
+
+    valid = nearest >= 0
+    safe_idx = nearest.clamp(min=0)
+    matched_dist = torch.gather(dists, 1, safe_idx.unsqueeze(1)).squeeze(1)
+    matched_dist = torch.where(valid, matched_dist, torch.full_like(matched_dist, float("inf")))
+    ambiguous = (second_best - matched_dist) < ambiguity_margin
+    return nearest, matched_dist, valid & ~ambiguous
 
 
 class TokenModel(torch.nn.Module):
@@ -47,8 +87,11 @@ class TokenModel(torch.nn.Module):
 
     def init_tokens(self, first_frame, second_frame):
         """Detects tokens from `second_frame`; estimates velocity by
-        finite difference against `first_frame`'s nearest detection to
-        each token (detection order isn't stable across frames)."""
+        finite difference against `first_frame`'s detections, paired by
+        optimal one-to-one assignment (see `_assign_velocity_pairs`;
+        detection order isn't stable across frames, and two balls close
+        together in frame0 can make plain nearest-match pick the same
+        frame0 detection for two different frame1 tokens)."""
         pos0 = find_token_positions(first_frame[0], self.radius, self.detect_threshold)
         pos1 = find_token_positions(second_frame[0], self.radius, self.detect_threshold)
         dtype = first_frame.dtype
@@ -61,21 +104,19 @@ class TokenModel(torch.nn.Module):
             velocities = torch.zeros_like(pos1)
         else:
             dists = torch.cdist(pos1, pos0)
-            nearest = dists.argmin(dim=1)
-            velocities = (pos1 - pos0[nearest]) / self.dt
-            # Nearest-match pairing is unbounded, so a token that was missed
-            # (or merged) in one of the two frames can pair with a different
-            # ball entirely and yield an absurd velocity that then throws the
-            # token off-grid. Reject any match implying a speed above
-            # max_init_speed (default 20 cells/s, roughly free-fall speed
-            # across a 20-cell grid at gravity=9.0 and far above the ~3.25
-            # cells/s spawn maximum) and coast from rest instead -- a zero
-            # velocity is recoverable by the dynamics network, a 20x-too-fast
-            # one is not.
+            nearest, matched_dist, keep = _assign_velocity_pairs(dists)
+            safe_idx = nearest.clamp(min=0)
+            velocities = (pos1 - pos0[safe_idx]) / self.dt
+            # A rejected match (unassigned row, an ambiguous near-tie, or an
+            # implausible implied speed) is unreliable, so coast from rest
+            # instead -- a zero velocity is recoverable by the dynamics
+            # network, a wrong-direction one is not. max_init_speed (default
+            # 20 cells/s) is roughly free-fall speed across a 20-cell grid at
+            # gravity=9.0, far above the ~3.25 cells/s spawn maximum.
             max_match_distance = self.max_init_speed * self.dt
-            matched_dist = torch.gather(dists, 1, nearest.unsqueeze(1)).squeeze(1)
+            reject = ~keep | (matched_dist > max_match_distance)
             velocities = torch.where(
-                (matched_dist > max_match_distance).unsqueeze(1),
+                reject.unsqueeze(1),
                 torch.zeros_like(velocities),
                 velocities,
             )

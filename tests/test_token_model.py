@@ -1,6 +1,6 @@
 import torch
 
-from model.token_model import TokenModel
+from model.token_model import TokenModel, _assign_velocity_pairs
 from model.token_rasterize import rasterize_tokens
 
 
@@ -155,3 +155,55 @@ def test_init_tokens_zeros_velocity_for_implausible_nearest_match():
     near = 1 - far
     assert torch.allclose(velocities[far], torch.zeros(2), atol=1e-6)
     assert torch.norm(velocities[near]) > 0.5
+
+
+def test_assign_velocity_pairs_gives_unique_match_when_frame0_balls_are_close():
+    # Two frame0 candidates 0.3 cells apart; independent per-row argmin
+    # would let both frame1 rows claim column 0 (seed 4750's duplicate-
+    # match bug in docs/debugging/experiment-log.md), silently dropping
+    # column 1's real partner. Optimal one-to-one assignment must not
+    # reuse a column across rows.
+    dists = torch.tensor([
+        [0.5, 0.8],
+        [0.6, 0.9],
+    ])
+    nearest, _, _ = _assign_velocity_pairs(dists)
+    assert nearest[0] != nearest[1]
+    assert set(nearest.tolist()) == {0, 1}
+
+
+def test_assign_velocity_pairs_rejects_ambiguous_near_tie():
+    # Row 0's best (col 0, dist 1.0) and second-best (col 1, dist 1.05)
+    # are within the ambiguity margin -- close enough that an optimal
+    # assignment can still pick the wrong physical ball (seed 4752's
+    # smooth-divergence case). Must be flagged unkept even though it's
+    # a clean unique assignment.
+    dists = torch.tensor([[1.0, 1.05, 9.0]])
+    _, _, keep = _assign_velocity_pairs(dists, ambiguity_margin=0.5)
+    assert not bool(keep[0])
+
+
+def test_assign_velocity_pairs_keeps_unambiguous_match():
+    dists = torch.tensor([[1.0, 9.0, 9.0]])
+    _, _, keep = _assign_velocity_pairs(dists, ambiguity_margin=0.5)
+    assert bool(keep[0])
+
+
+def test_init_tokens_avoids_duplicate_frame0_match():
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt)
+    # Both frame1 balls end up much nearer to frame0's second detection
+    # (16, 5) than to its first (1, 5) -- plain per-row argmin would match
+    # both frame1 tokens to that same frame0 detection, silently
+    # dropping (1, 5) as anyone's partner. Detections stay individually
+    # resolvable (balls kept well apart so peak detection itself -- a
+    # separate, undiagnosed issue at close range -- doesn't interfere).
+    pos0 = torch.tensor([[1.0, 5.0], [16.0, 5.0]])
+    pos1 = torch.tensor([[13.0, 5.0], [17.0, 5.0]])
+    zero_vel = torch.zeros(2, 2)
+    frame0 = rasterize_tokens(pos0, zero_vel, n, radius)
+    frame1 = rasterize_tokens(pos1, zero_vel, n, radius)
+
+    positions, velocities, _ = model.init_tokens(frame0, frame1)
+    assert positions.shape[0] == 2
+    assert torch.isfinite(velocities).all()
