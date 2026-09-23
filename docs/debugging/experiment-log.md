@@ -1243,3 +1243,28 @@ ruled out. Not yet tried: widen or soften the bailout window when a
 token has drifted (re-detect from a larger search radius before giving
 up), or an explicit per-token confidence signal the observation branch
 could use instead of a hard threshold.
+
+**Bailout confirmed directly (`--trace` flag added to
+`diagnose_token_dropout.py`)**: instrumented `centroid_near`'s own
+window-mass check step-by-step for all 11 dropout events from the
+48-seed run above. Every one shows the same shape -- `window_total`
+declines gradually over 3-10 steps (not a sudden jump) while mostly
+unoccluded, crosses to exactly `0.0000`, and stays exactly `0.0000`
+every step thereafter with zero recovery, all the way to step 18. The
+1e-6 bailout in `model/token_detect.py` is confirmed as the absorbing
+state: once a token's predicted position drifts far enough that its
+own ball leaves the observation window, there is no mechanism -- no
+widening search, no soft fallback -- that can ever bring it back, so
+whatever caused the initial drift becomes permanent and total.
+
+One outlier (seed 4773, ball 0) shows a second path into the same
+trap: 11 consecutive steps flagged `occluded` (a persistent neighbor
+keeping the correction gate shut) before window_total ever starts
+declining -- chronic occlusion-gate suppression, not drift, starves
+the correction and leads to the same permanent bailout.
+
+Rules out "PROB genuinely vanishes while position is still tracked" --
+the decline precedes and causes the bailout, not the reverse. Next:
+prototype softening the bailout (progressively widen the search window
+on decline, or drop the hard cutoff for a soft distance-weighted
+fallback) rather than the current all-or-nothing threshold.

@@ -10,7 +10,7 @@ across every seed.
 Usage:
     PYTHONPATH=. python3 scripts/diagnose_token_dropout.py \
         --checkpoint checkpoints/token_model_h12_v9.pt \
-        --num-seeds 16 --num-steps 20
+        --num-seeds 16 --num-steps 20 --trace
 """
 import argparse
 import random
@@ -22,6 +22,7 @@ import bounce
 from model.dataset import make_scenario_uniform
 from model.token_model import TokenModel
 from model.token_match import match_tokens_to_state
+from model.token_gate import occluding_mask
 
 
 def load_model(checkpoint_path, n, hidden_dim, neighbor_radius):
@@ -61,6 +62,24 @@ def peak_prob_at(prob, position, radius=0.75, margin=1.0):
     return float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].max())
 
 
+def window_total_at(prob, position, radius, margin):
+    """Same window centroid_near reads from, returning its raw mass sum --
+    this is exactly the `total` centroid_near checks against its 1e-6
+    bailout, so a trace of this value over steps shows precisely when (or
+    whether) that bailout fires for a given token."""
+    n = prob.shape[0]
+    half = int(np.ceil(radius + margin))
+    cx = int(round(float(position[0])))
+    cy = int(round(float(position[1])))
+    i_lo_raw, i_hi_raw = cx - half, cx + half
+    j_lo_raw, j_hi_raw = cy - half, cy + half
+    if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+        return 0.0  # off-grid entirely: centroid_near's other early-return
+    i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+    j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
+    return float(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
@@ -72,6 +91,8 @@ def main():
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
+    ap.add_argument("--trace", action="store_true",
+                     help="print per-step window_total/occlusion for each dropped token")
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius)
@@ -107,9 +128,15 @@ def main():
                 ball = int(token_to_ball[t])
                 frame1_nn_dist_by_ball.setdefault(ball, []).append(episode_nn[t])
 
+        num_tokens = positions.shape[0]
+        trace = {t: [] for t in range(num_tokens)}  # (step, window_total, occluding)
         observed = g1
         with torch.no_grad():
             for step in range(args.num_steps - 1):
+                occ = occluding_mask(positions, model._gate_radius())
+                for t in range(num_tokens):
+                    wt = window_total_at(observed[0], positions[t], model.radius, model.detect_margin)
+                    trace[t].append((step, wt, bool(occ[t])))
                 positions, velocities, hidden, pred_grid = model.step(positions, velocities, hidden, observed)
                 observed = pred_grid
         last_peak = [peak_prob_at(observed[0], positions[t]) for t in range(positions.shape[0])]
@@ -121,6 +148,12 @@ def main():
             if last_peak[t] < args.dropout_threshold:
                 dropout_ball_idx.append((seed, ball))
                 rank_at_dropout.append((peak_order.index(t), nn_order.index(t), positions.shape[0]))
+                if args.trace:
+                    print(f"\n--- trace: seed {seed}, ball {ball} (token {t}), frame1 peak={episode_peaks[t]:.4f} ---")
+                    for step, wt, occ in trace[t]:
+                        bail = "BAILOUT" if wt <= 1e-6 else ""
+                        occ_str = "occluded" if occ else ""
+                        print(f"  step {step:2d}: window_total={wt:.4f} {occ_str} {bail}")
 
     print(f"=== dropout events (peak < {args.dropout_threshold} at step {args.num_steps - 1}) ===")
     for seed, ball in dropout_ball_idx:
