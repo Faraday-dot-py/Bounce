@@ -90,7 +90,8 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
         )
         if collapse_weight > 0.0:
             total_loss = total_loss + collapse_weight * window_collapse_loss(
-                pred_grid[0], positions, model.radius, margin=collapse_margin, floor=collapse_floor
+                pred_grid[0], positions, model.radius, margin=collapse_margin, floor=collapse_floor,
+                all_positions=positions, self_idx_offset=0,
             )
         self_feed = random.random() < sampling_p
         observed_frame = pred_grid.detach() if self_feed else target_grid
