@@ -1069,3 +1069,53 @@ never enabled for the token model — `mass_weight` defaults to 0.0 in
 both `token_grid_loss` and `token_train.py`), or revisiting whether
 `occupancy_weighted_mse`'s core incentive structure (vanish is always
 almost-free) needs a structural fix rather than an additive penalty.
+
+**`boundary_loss` added, dissolution actually stops — new failure mode
+(motion stall) replaces it.** Rather than another indirect pixel-space
+penalty, added `boundary_loss` (`model/token_losses.py`) operating
+directly on `TokenModel.step`'s tracked (x, y) positions: quadratic
+penalty for any coordinate outside `[0, n)`, wired into
+`token_rollout_loss` via `--boundary-weight` (5 new tests, 46/46 suite
+passing). Job 2849: same recipe as 2847 (10k-sample cache, 3 epochs,
+`ramp_epochs=2`) plus `peak_weight=0.5` and `boundary_weight=0.1` →
+`checkpoints/token_model_h12_v7.pt`.
+
+Training logged `loss=nan` twice (once per epoch, both times on a
+single reporting window, both times followed immediately by normal
+finite losses on the very next window). Investigated before trusting
+the result: downloaded the final checkpoint and directly checked every
+parameter tensor for NaN/Inf — none found (9,956/9,956 clean). Most
+likely mechanism: `boundary_loss`'s squared term is unbounded, so a
+rare, still-early-training extreme position produces a forward value
+large enough to overflow to `inf`; `clip_grad_norm_`'s scaling
+coefficient becomes `max_norm/(inf+eps) = 0` (well-defined, not NaN,
+for a finite numerator over an infinite denominator), making that
+step's optimizer update a no-op rather than corrupting weights — which
+matches the observed instant recovery. (`rasterize_tokens` was checked
+too: an extreme position there degrades gracefully to an all-zero/
+background contribution, not NaN, so it's not the source.) Exactly
+where the printed value flips from `inf` to `nan` wasn't pinned down
+further, but since the saved weights are verified clean, this doesn't
+invalidate job 2849's result. Follow-up, not urgent: clamp the
+boundary distance before squaring so a training run isn't spending a
+no-op step on this at all.
+
+Diagnostic grid + an unbiased subagent review: **no object ever
+disappears or fades in the token_model row across all 8 sampled steps
+through step 20** — a real, qualitative change from job 2842/2847's
+gradual give-up-to-blank pattern. But a new symptom replaces it: the
+two rows track closely through step ~5, then `token_model`'s objects
+settle into a near-static clustered arrangement from step ~8 onward
+(positions barely change between step 8/12/20) while `ground_truth`
+keeps moving/rearranging — a motion stall, not vanishing. Net read:
+`boundary_weight` measurably fixed the specific failure mode it was
+built for (drift-to-off-grid-and-vanish), but revealed the model
+substituting a different cheap escape (stop moving) rather than
+learning genuinely stable long-horizon dynamics. Rollout video:
+`videos/token_model_v7_peakweight0.5_boundary0.1_rollout.mp4`.
+
+**Not yet tried**: a motion/velocity-floor term to penalize near-zero
+predicted displacement (the stall's direct analog to `peak_weight`
+for vanishing), tuning `boundary_weight` down in case it's
+over-dominating and pinning tokens near their current position, or the
+still-untried `mass_weight`/structural-incentive options noted above.
