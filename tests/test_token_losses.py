@@ -1,6 +1,6 @@
 import torch
 
-from model.token_losses import boundary_loss, token_grid_loss
+from model.token_losses import boundary_loss, token_grid_loss, token_state_loss
 
 
 def test_token_grid_loss_is_zero_for_identical_grids():
@@ -105,3 +105,70 @@ def test_boundary_loss_gradient_flows_to_positions():
     assert positions.grad is not None
     assert positions.grad[0, 0] != 0.0
     assert positions.grad[0, 1] == 0.0
+
+
+def test_token_state_loss_is_zero_for_exact_match():
+    final_pos = torch.tensor([[5.0, 3.0], [1.0, 1.0]])
+    final_vel = torch.tensor([[0.5, -0.5], [0.0, 2.0]])
+    target = {
+        "x": torch.tensor([1.0, 5.0]),
+        "y": torch.tensor([1.0, 3.0]),
+        "vx": torch.tensor([0.0, 0.5]),
+        "vy": torch.tensor([2.0, -0.5]),
+    }
+    match_idx = torch.tensor([1, 0])  # final_pos[0] <-> target index 1, final_pos[1] <-> target index 0
+    loss = token_state_loss(final_pos, final_vel, target, match_idx)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_token_state_loss_grows_with_position_offset():
+    target = {
+        "x": torch.tensor([5.0]),
+        "y": torch.tensor([5.0]),
+        "vx": torch.tensor([0.0]),
+        "vy": torch.tensor([0.0]),
+    }
+    match_idx = torch.tensor([0])
+    final_vel = torch.tensor([[0.0, 0.0]])
+
+    close = token_state_loss(torch.tensor([[5.1, 5.0]]), final_vel, target, match_idx)
+    far = token_state_loss(torch.tensor([[8.0, 5.0]]), final_vel, target, match_idx)
+    assert far > close > 0
+
+
+def test_token_state_loss_no_free_pass_for_background_prediction():
+    # The whole point of this loss: unlike token_grid_loss, predicting
+    # "nothing" isn't an option here -- there's no background cell to
+    # match to for free, every real token has a required numeric target.
+    target = {
+        "x": torch.tensor([5.0]),
+        "y": torch.tensor([5.0]),
+        "vx": torch.tensor([1.0]),
+        "vy": torch.tensor([1.0]),
+    }
+    match_idx = torch.tensor([0])
+    give_up_pos = torch.tensor([[0.0, 0.0]])
+    give_up_vel = torch.tensor([[0.0, 0.0]])
+    loss = token_state_loss(give_up_pos, give_up_vel, target, match_idx)
+    assert loss > 0
+
+
+def test_token_state_loss_empty_tokens_returns_zero():
+    final_pos = torch.zeros((0, 2))
+    final_vel = torch.zeros((0, 2))
+    target = {"x": torch.zeros(0), "y": torch.zeros(0), "vx": torch.zeros(0), "vy": torch.zeros(0)}
+    match_idx = torch.zeros((0,), dtype=torch.long)
+    loss = token_state_loss(final_pos, final_vel, target, match_idx)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_token_state_loss_gradient_flows_to_positions_and_velocities():
+    final_pos = torch.tensor([[3.0, 3.0]], requires_grad=True)
+    final_vel = torch.tensor([[1.0, 1.0]], requires_grad=True)
+    target = {"x": torch.tensor([5.0]), "y": torch.tensor([5.0]),
+              "vx": torch.tensor([0.0]), "vy": torch.tensor([0.0])}
+    match_idx = torch.tensor([0])
+    loss = token_state_loss(final_pos, final_vel, target, match_idx)
+    loss.backward()
+    assert final_pos.grad is not None and (final_pos.grad != 0).all()
+    assert final_vel.grad is not None and (final_vel.grad != 0).all()

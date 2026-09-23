@@ -5,8 +5,9 @@ import torch
 from torch.utils.data import DataLoader
 
 from model.token_dataset import BounceTokenSequenceDataset, load_dataset_samples
+from model.token_match import match_tokens_to_state
 from model.token_model import TokenModel
-from model.token_losses import boundary_loss, token_grid_loss
+from model.token_losses import boundary_loss, token_grid_loss, token_state_loss
 
 
 def sampling_probability(epoch, ramp_epochs):
@@ -15,9 +16,10 @@ def sampling_probability(epoch, ramp_epochs):
     return min(1.0, max(0.0, epoch / ramp_epochs))
 
 
-def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
+def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16,
-                        boundary_weight=0.1, boundary_margin=0.0):
+                        boundary_weight=0.1, boundary_margin=0.0,
+                        state_weight=1.0, grid_weight=0.1):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -27,32 +29,45 @@ def token_rollout_loss(model, grid_seq, horizon, sampling_p, weights,
     into the observation branch is swapped for the model's own (detached)
     prediction on a self-fed step.
 
-    `token_grid_loss` is occupancy-weighted (see model/token_losses.py),
-    not a plain per-pixel MSE -- a first real training run (job 2840)
-    using plain MSE converged to an all-background "give up" solution,
-    since predicting nothing scores better than a present-but-imperfect
-    ball under a loss that doesn't down-weight background.
+    Primary signal is `token_state_loss` (model/token_losses.py): direct
+    MSE against the dataset's exact per-ball state, matched once via
+    match_tokens_to_state right after init (token identity is stable for
+    the rest of the rollout -- see model/token_match.py). This has no
+    give-up degenerate solution: there's no background cell to hide
+    behind, so vanishing/stalling aren't cheap regardless of loss
+    weighting, unlike the grid-space losses below.
 
-    `boundary_loss` is added on top of that: even with peak_weight
-    penalizing vanishing intensity, job 2847 (peak_weight=0.5) still
-    showed tokens drifting off-grid and dissolving by step ~12-20. That
-    term only sees the rasterized grid, reacting after a token is
-    already gone; this operates on the tracked positions directly, at
-    every rollout step, not just the last one."""
+    `token_grid_loss` (occupancy-weighted, not plain per-pixel MSE --
+    job 2840 showed plain MSE converges to an all-background give-up
+    solution) is kept as a smaller secondary term so the actual
+    rasterized output stays directly optimized too, ramped in from 0
+    over the same sampling_p schedule as self-feed (`grid_weight` is the
+    weight sampling_p=1.0 reaches, not the weight used at sampling_p=0).
+
+    `boundary_loss` operates on tracked positions directly, at every
+    rollout step, not just the rasterized output -- added because job
+    2847 (peak_weight=0.5 alone) still showed tokens drifting off-grid
+    and dissolving by step ~12-20."""
     device = next(model.parameters()).device
     grid_seq = grid_seq.to(device)
     weights = weights.to(device)
     positions, velocities, hidden = model.init_tokens(grid_seq[0], grid_seq[1])
+    match_idx = match_tokens_to_state(positions, state_seq[1])
     observed_frame = grid_seq[1]
     total_loss = grid_seq.new_zeros(())
     num_steps = max(horizon - 1, 1)
+    grid_weight_effective = grid_weight * sampling_p
     for step in range(num_steps):
         source_grid = observed_frame
         positions, velocities, hidden, pred_grid = model.step(
             positions, velocities, hidden, observed_frame
         )
         target_grid = grid_seq[step + 2]
-        total_loss = total_loss + token_grid_loss(
+        target_state = state_seq[step + 2]
+        total_loss = total_loss + state_weight * token_state_loss(
+            positions, velocities, target_state, match_idx
+        )
+        total_loss = total_loss + grid_weight_effective * token_grid_loss(
             pred_grid, target_grid, source_grid, weights,
             bg_weight=bg_weight, peak_weight=peak_weight,
             mass_weight=mass_weight, mass_tile=mass_tile,
@@ -88,11 +103,12 @@ def train(args):
         sampling_p = sampling_probability(epoch, args.ramp_epochs)
         epoch_loss = 0.0
         running_loss = 0.0
-        for batch_idx, (grid_seq, _) in enumerate(loader):
+        for batch_idx, (grid_seq, state_seq) in enumerate(loader):
             loss = token_rollout_loss(
-                model, grid_seq, args.horizon, sampling_p, weights,
+                model, grid_seq, state_seq, args.horizon, sampling_p, weights,
                 bg_weight=args.bg_weight, peak_weight=args.peak_weight,
                 boundary_weight=args.boundary_weight, boundary_margin=args.boundary_margin,
+                state_weight=args.state_weight, grid_weight=args.grid_weight,
             )
             opt.zero_grad()
             loss.backward()
@@ -128,6 +144,10 @@ def main():
     ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--boundary-weight", type=float, default=0.1)
     ap.add_argument("--boundary-margin", type=float, default=0.0)
+    ap.add_argument("--state-weight", type=float, default=1.0)
+    # Weight token_grid_loss ramps to (from 0) over the same sampling_p
+    # schedule as self-feed -- see token_rollout_loss's docstring.
+    ap.add_argument("--grid-weight", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--checkpoint", type=str, default="checkpoint_token.pt")
     ap.add_argument("--log-every", type=int, default=100,

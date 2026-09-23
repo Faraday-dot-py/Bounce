@@ -18,7 +18,7 @@ def test_sampling_probability_ramps_linearly_and_clamps():
 def test_token_rollout_loss_overfits_a_single_sequence():
     torch.manual_seed(4738)
     dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=3)
-    grid_seq, _ = dataset[0]
+    grid_seq, state_seq = dataset[0]
     model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
     opt = torch.optim.Adam(model.parameters(), lr=1e-2)
     weights = torch.tensor([1.0, 0.1, 0.1])
@@ -31,7 +31,7 @@ def test_token_rollout_loss_overfits_a_single_sequence():
     first_loss = None
     last_loss = None
     for step in range(2000):
-        loss = token_rollout_loss(model, grid_seq, horizon=3, sampling_p=0.0, weights=weights)
+        loss = token_rollout_loss(model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights)
         if step == 0:
             first_loss = loss.item()
         opt.zero_grad()
@@ -45,18 +45,18 @@ def test_token_rollout_loss_overfits_a_single_sequence():
 def test_token_rollout_loss_self_feeds_when_sampling_p_is_one():
     torch.manual_seed(4738)
     dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=3)
-    grid_seq, _ = dataset[0]
+    grid_seq, state_seq = dataset[0]
     model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
     weights = torch.tensor([1.0, 0.1, 0.1])
 
-    loss = token_rollout_loss(model, grid_seq, horizon=3, sampling_p=1.0, weights=weights)
+    loss = token_rollout_loss(model, grid_seq, state_seq, horizon=3, sampling_p=1.0, weights=weights)
     assert torch.isfinite(loss)
 
 
 def test_token_rollout_loss_self_feed_decided_per_step():
     torch.manual_seed(4738)
     dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=4)
-    grid_seq, _ = dataset[0]
+    grid_seq, state_seq = dataset[0]
     model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
     weights = torch.tensor([1.0, 0.1, 0.1])
 
@@ -64,9 +64,50 @@ def test_token_rollout_loss_self_feed_decided_per_step():
     # step: False, True, False
     with patch.object(token_train_module.random, "random", side_effect=[0.9, 0.1, 0.9]):
         with patch.object(model, "step", wraps=model.step) as mock_step:
-            token_rollout_loss(model, grid_seq, horizon=4, sampling_p=0.5, weights=weights)
+            token_rollout_loss(model, grid_seq, state_seq, horizon=4, sampling_p=0.5, weights=weights)
 
     assert mock_step.call_count == 3
     # step 2's call used ground-truth frame 2 as observed_frame (step 1 not self-fed)
     _, _, _, observed_frame_2 = mock_step.call_args_list[1].args
     assert torch.equal(observed_frame_2, grid_seq[2])
+
+
+def test_token_rollout_loss_grid_weight_is_zero_at_sampling_p_zero():
+    # grid_weight is the weight sampling_p=1.0 reaches; at sampling_p=0
+    # (start of the ramp) token_grid_loss must not contribute at all, so
+    # a wildly wrong rasterized-grid comparison can't move the loss.
+    torch.manual_seed(4738)
+    dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=3)
+    grid_seq, state_seq = dataset[0]
+    model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+
+    with patch("model.token_train.token_grid_loss") as mock_grid_loss:
+        mock_grid_loss.return_value = torch.tensor(1000.0)
+        loss_zero_weight = token_rollout_loss(
+            model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights, grid_weight=0.1
+        )
+    loss_without_grid_call = token_rollout_loss(
+        model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights, grid_weight=0.0
+    )
+    assert torch.allclose(loss_zero_weight, loss_without_grid_call, atol=1e-4)
+
+
+def test_token_rollout_loss_state_weight_scales_state_term():
+    torch.manual_seed(4738)
+    dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=3)
+    grid_seq, state_seq = dataset[0]
+    model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+
+    torch.manual_seed(0)
+    loss_low = token_rollout_loss(
+        model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights,
+        state_weight=0.0, grid_weight=0.0, boundary_weight=0.0,
+    )
+    torch.manual_seed(0)
+    loss_high = token_rollout_loss(
+        model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights,
+        state_weight=1.0, grid_weight=0.0, boundary_weight=0.0,
+    )
+    assert not torch.allclose(loss_low, loss_high)
