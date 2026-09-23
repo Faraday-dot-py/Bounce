@@ -1772,3 +1772,66 @@ family needs to penalize (or structurally prevent) a token latching
 onto a *neighbor's* mass, not just penalize having none. Flagging for
 human decision before further GPU-hours on this line, per the same
 judgment call made after v12.
+
+## 2026-09-23 (14:29) — v14 (territory masking, job 2858): fixes v13's identity-theft mechanism but dropout count much worse (66 vs v9's 8)
+
+Implemented the architecture-redesign direction chosen by the user after
+the v13 synthesis (`docs/superpowers/specs/2026-09-23-token-territory-masking-design.md`,
+`docs/superpowers/plans/2026-09-23-token-territory-masking.md`): a
+Voronoi territory mask (`model.token_detect.territory_mask`) over all
+currently-tracked token positions, applied to `centroid_near`'s and
+`window_collapse_loss`'s window reads so a token's observation can never
+include mass closer to a different tracked token. `centroid_near`'s
+give-up search widened `max_expansions` 3->6 (`TokenModel.__init__`), now
+considered safe since a wider search can no longer cross into a
+neighbor's territory. 8 new unit/integration tests (119/119 passing
+before launch). v14 (job 2858): identical recipe to v9 (state-loss-only
+ablation, 3 epochs, same cached dataset) -- single-variable A/B, no
+change to epochs or dataset size.
+
+**Result: dropout 66 events across 48 seeds (ball-index breakdown {0: 18,
+1: 16, 2: 16, 3: 16}) vs. v9's 8 (re-measured fresh with the identical
+script/environment for a fair comparison, not the previously-logged 6 --
+same ballpark, treated as the current baseline). Categorically worse
+than v9, and worse than v13's 34/48 too.**
+
+**Mechanism confirmed by the qualitative failure shape, not just the
+number.** Unbiased subagent review of the diagnostic grid
+(`videos/token_model_v14_diagnostic_grid.png`, no hypothesis primed):
+balls track well through step 2, then vanish one by one with no blur or
+color bleed -- "the missing balls don't leave a smeared or blended
+trace, they just disappear... surviving blobs stay fairly crisp." This
+is qualitatively different from v13's failure (merged multi-color
+patches at ball boundaries) and confirms the identity-theft mechanism
+this design targeted is actually gone -- no evidence of one token's
+mass being stolen by another. But clean vanishing is now happening far
+more often than under the unmasked v9 baseline, not less.
+
+**Leading hypothesis (not yet verified): territory boundaries are drawn
+between *tracked* positions, which are themselves imprecise, not between
+true ball centers.** When two tracked tokens are near each other but
+neither is exactly centered on its own ball (normal tracking noise, not
+a bug), the Voronoi split can fall in the middle of one token's own real
+mass, handing part of its own ball's splat to the neighbor's territory
+and starving both windows below `floor`/the total-mass check -- turning
+ordinary tracking jitter into a for-real dropout that would have
+resolved itself unmasked (the unmasked window would have simply summed
+the whole nearby mass, correctly, most of the time). This would explain
+why the count rose roughly evenly across all four ball indices (not
+concentrated on one) and why widening `max_expansions` (intended to
+help) didn't offset it -- a wider search still can't cross a wrongly-
+placed territory boundary, so widening only helps the give-up case this
+design already handles, not the new one it may have introduced. Not yet
+verified against the actual per-step territory-mask/window-mass trace;
+flagging as the leading explanation, not a confirmed root cause.
+
+**Per this project's systematic-debugging discipline and the plan's own
+validation step 5: not chaining another fix onto this result.** The
+territory-masking design achieved its stated goal (no more cross-token
+mass theft) but introduced a larger regression by a different, unverified
+mechanism. This is a new decision point for the human, not a "closer but
+not there yet" -- the architecture-redesign path itself needs
+reassessment (e.g., a softer/probabilistic territory boundary instead of
+a hard nearest-token partition, or reverting to unmasked windows for
+low-confidence/high-uncertainty tracked positions) before spending more
+GPU-hours on this line.
