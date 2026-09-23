@@ -29,25 +29,56 @@ def generate_token_sequence(balls, n, dt, gravity, radius, stiffness, substeps, 
     return frames, states
 
 
+SCENARIOS = ("uniform", "clustered", "settled")
+
+
+def generate_dataset_samples(num_samples, n, ball_range, seed, horizon=3, dt=0.15, gravity=9.0,
+                              radius=0.75, stiffness=400.0, substeps=8, vy=2.3,
+                              cluster_radius=3.0, settle_steps=200, log_every=0):
+    samples = []
+    rng = random.Random(seed)
+    for i in range(num_samples):
+        scenario = SCENARIOS[i % len(SCENARIOS)]
+        num_balls = rng.randint(*ball_range)
+        balls = generate_scenario_balls(
+            scenario, num_balls, n, vy, rng, cluster_radius, radius, gravity,
+            stiffness, dt, substeps, settle_steps,
+        )
+        frames, states = generate_token_sequence(
+            balls, n, dt, gravity, radius, stiffness, substeps, horizon
+        )
+        samples.append((np.stack(frames), states))
+        if log_every and (i + 1) % log_every == 0:
+            print(f"generated {i + 1}/{num_samples} samples", flush=True)
+    return samples
+
+
+def save_dataset_samples(samples, path):
+    torch.save(samples, path)
+
+
+def load_dataset_samples(path):
+    # Samples are (np.ndarray, list[dict]) tuples, not just tensors, so this
+    # needs the full unpickler; only load caches this script itself wrote.
+    return torch.load(path, weights_only=False)
+
+
 class BounceTokenSequenceDataset(Dataset):
-    SCENARIOS = ("uniform", "clustered", "settled")
+    SCENARIOS = SCENARIOS
 
     def __init__(self, num_samples, n, ball_range, seed, horizon=3, dt=0.15, gravity=9.0,
                  radius=0.75, stiffness=400.0, substeps=8, vy=2.3,
-                 cluster_radius=3.0, settle_steps=200):
-        self.samples = []
-        rng = random.Random(seed)
-        for i in range(num_samples):
-            scenario = self.SCENARIOS[i % len(self.SCENARIOS)]
-            num_balls = rng.randint(*ball_range)
-            balls = generate_scenario_balls(
-                scenario, num_balls, n, vy, rng, cluster_radius, radius, gravity,
-                stiffness, dt, substeps, settle_steps,
-            )
-            frames, states = generate_token_sequence(
-                balls, n, dt, gravity, radius, stiffness, substeps, horizon
-            )
-            self.samples.append((np.stack(frames), states))
+                 cluster_radius=3.0, settle_steps=200, log_every=0):
+        self.samples = generate_dataset_samples(
+            num_samples, n, ball_range, seed, horizon, dt, gravity, radius,
+            stiffness, substeps, vy, cluster_radius, settle_steps, log_every,
+        )
+
+    @classmethod
+    def from_samples(cls, samples):
+        obj = cls.__new__(cls)
+        obj.samples = samples
+        return obj
 
     def __len__(self):
         return len(self.samples)

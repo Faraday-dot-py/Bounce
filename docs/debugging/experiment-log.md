@@ -1026,3 +1026,46 @@ retrain validation). Still not done regardless of which lever is tried
 next: honest-horizon rollout comparison against `stage2_flownet_h12_v6.pt`,
 per the design spec's validation plan, before any conclusion about
 whether this architecture is worth adopting.
+
+**`peak_weight` bump tried, dissolution not fixed.** Also restructured
+the token dataset pipeline while at it: `BounceTokenSequenceDataset`
+generated its `num_samples` trajectories from scratch in-memory on
+every training-script invocation (no disk cache, unlike the flownet
+path's `dataset_cache_seq*.npz`); split generation out into
+`generate_dataset_samples()`/`save_dataset_samples()`/
+`load_dataset_samples()` (`model/token_dataset.py`) plus a standalone
+`scripts/generate_token_dataset.py`, and added `--dataset-cache` to
+`token_train.py` so a training job can load a pre-generated cache
+instead of regenerating it. Also applied the user's LLM-pretraining-
+style intuition (large dataset, few epochs, since no grokking signal
+had been observed to justify heavy repetition): job 2846 generated a
+10k-sample cache (`checkpoints/token_dataset_10000_h12_seed4738.pt`,
+6m18s, CPU-only); job 2847 trained 3 epochs against it with
+`peak_weight=0.5` (5x default) and `ramp_epochs=2` (needed so
+`sampling_p` actually reaches 1.0 within only 3 epochs — at the
+original `ramp_epochs=25` the self-feed regime where this failure mode
+lives would barely have been exercised at all) →
+`checkpoints/token_model_h12_v6.pt`. Loss: epoch 0 (teacher-forced)
+0.1847, epoch 1 (`sampling_p=0.5`) 0.1892, epoch 2 (`sampling_p=1.0`)
+0.1959 — flat/mild uptick as self-feed increases, no collapse in the
+aggregate number.
+
+Diagnostic grid + an unbiased subagent review (per
+`frame-artifact-review-prompt.md`) tell a different story: token_model
+tracks ground truth closely through step ~8, then both rows diverge
+sharply — by step 12 two of four balls have vanished/merged (no yellow
+ball visible), and by step 20 the frame is completely blank while
+ground truth still shows 3 distinct balls. Same gradual-give-up
+dissolution pattern as job 2842's `peak_weight=0.1` run, at
+essentially the same step range (partial loss by ~12, total blank by
+~20) — the 5x `peak_weight` bump, 10k dataset, and reduced repetition
+did not visibly delay or soften the collapse. `peak_weight` alone,
+at least at this magnitude, is not the fix. Rollout video:
+`videos/token_model_v6_peakweight0.5_10k3ep_rollout.mp4`.
+
+**Not yet tried**: a larger `peak_weight` bump (0.5 was a first guess,
+not tuned), the per-tile `mass_weight` term (already implemented,
+never enabled for the token model — `mass_weight` defaults to 0.0 in
+both `token_grid_loss` and `token_train.py`), or revisiting whether
+`occupancy_weighted_mse`'s core incentive structure (vanish is always
+almost-free) needs a structural fix rather than an additive penalty.
