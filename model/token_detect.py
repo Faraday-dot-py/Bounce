@@ -51,6 +51,32 @@ def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
     return position
 
 
+def _suppress_tied_peaks(coords, prob, radius):
+    """`prob == pooled` non-max suppression doesn't break ties: a ball
+    centered near a half-integer coordinate splats equal mass onto its
+    two straddled cells, so both satisfy `prob == pooled` and register
+    as separate peaks for what is one ball (see
+    docs/debugging/experiment-log.md -- reproduced directly with a
+    ball at x=10.5, radius=1.5: cells x=10 and x=11 tie at 0.487 and
+    both pass). Keeps the highest-value peak in any cluster of
+    candidates within `radius` of each other, discarding the rest --
+    the same physical-footprint-sized threshold `find_token_positions`
+    already uses to accept merging close-together balls into one peak,
+    so this doesn't introduce a new merge distance, just makes the
+    existing one deterministic under ties."""
+    if coords.shape[0] <= 1:
+        return coords
+    vals = prob[coords[:, 0].long(), coords[:, 1].long()]
+    order = torch.argsort(vals, descending=True)
+    kept = []
+    for idx in order.tolist():
+        c = coords[idx]
+        if all(float(torch.norm(c - coords[k])) > radius for k in kept):
+            kept.append(idx)
+    kept = sorted(kept)
+    return coords[torch.tensor(kept, dtype=torch.long, device=coords.device)]
+
+
 def find_token_positions(prob, radius, threshold=0.1):
     """Detect one token per isolated ball via non-max suppression over a
     window sized to one ball's footprint, refined by `centroid_near`.
@@ -68,4 +94,5 @@ def find_token_positions(prob, radius, threshold=0.1):
     coords = torch.nonzero(is_peak, as_tuple=False).to(prob.dtype)
     if coords.shape[0] == 0:
         return torch.zeros((0, 2), dtype=prob.dtype, device=prob.device)
+    coords = _suppress_tied_peaks(coords, prob, radius)
     return torch.stack([centroid_near(prob, c, radius) for c in coords])

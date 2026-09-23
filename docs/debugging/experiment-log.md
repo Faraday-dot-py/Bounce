@@ -1379,3 +1379,32 @@ what should be one ball at close range, reproduced independently while
 writing this fix's test) is the most likely source of some remaining
 dropout events and is the next thing to investigate -- not yet
 root-caused or fixed.
+
+**Duplicate-peak bug has (at least) two distinct causes, one now fixed
+(`model/token_detect.py`, `_suppress_tied_peaks`)**: reproducing it
+directly (a single ball at x=10.5, radius=1.5) showed the raw
+`prob == pooled` non-max suppression doesn't break exact ties -- a
+ball splatting equal mass onto the two cells it straddles registers
+both as separate peaks. Fixed by keeping only the highest-value peak
+within `radius` of any other candidate (deterministic tie-break, same
+merge-distance philosophy the function already documents for
+close-together balls). New regression test confirms this: fails
+(2 peaks) before the fix, passes (1) after. 94/94 tests pass.
+
+This does **not** explain seed 4750's remaining duplicate, though:
+re-inspecting its *raw* (pre-`centroid_near`) peak coordinates shows
+4 well-separated cells (`(11,18) (13,7) (15,9) (18,11)`, all >2 cells
+apart -- no tie, no near-tie), one of which, `(13,7)` at prob 0.38, is
+a secondary local maximum in the splat tail of the real ball at
+`(15,9)`/true position ~(14.95, 9.08), not a distinct ball. Both raw
+peaks independently refine via `centroid_near` toward the same true
+ball (hence the ~(14.2, 8.2) duplicate seen in earlier logging) --
+this is a shape artifact in `bounce.splat_all`'s own kernel (a
+secondary bump/ridge in the decay tail, not the model's rasterizer),
+still unexplained and not addressed by either fix in this session.
+48-seed dropout count unchanged at 6 after this fix (expected -- it
+targets exact ties, not this separate tail-artifact mechanism). Next:
+inspect `bounce.splat_all`'s kernel shape directly (not a neural net,
+so this should be a straightforward function-shape read, not another
+model-behavior investigation) to see why it's non-monotonic far enough
+from center to create a second local max.

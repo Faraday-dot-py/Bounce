@@ -53,6 +53,18 @@ def test_find_token_positions_merges_heavily_overlapping_balls():
     assert detected.shape[0] < 2
 
 
+def test_find_token_positions_breaks_ties_at_half_integer_center():
+    # A ball centered exactly between two grid cells splats equal mass
+    # onto both, so raw `prob == pooled` non-max suppression doesn't
+    # break the tie and both cells register as peaks for one ball (see
+    # docs/debugging/experiment-log.md). Reproduced directly at radius
+    # 1.5, x=10.5.
+    balls = [{"x": 10.5, "y": 5.0, "vx": 0.0, "vy": 0.0}]
+    prob = _prob_channel(balls, 20, 1.5)
+    detected = find_token_positions(prob, radius=1.5)
+    assert detected.shape[0] == 1
+
+
 def test_find_token_positions_handles_empty_grid():
     prob = torch.zeros((20, 20))
     detected = find_token_positions(prob, radius=0.75)
