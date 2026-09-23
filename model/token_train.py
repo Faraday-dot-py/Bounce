@@ -51,6 +51,7 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
     device = next(model.parameters()).device
     grid_seq = grid_seq.to(device)
     weights = weights.to(device)
+    state_seq = [{k: v.to(device) for k, v in frame.items()} for frame in state_seq]
     positions, velocities, hidden = model.init_tokens(grid_seq[0], grid_seq[1])
     match_idx = match_tokens_to_state(positions, state_seq[1])
     observed_frame = grid_seq[1]
