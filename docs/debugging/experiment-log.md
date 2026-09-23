@@ -1168,3 +1168,35 @@ dominate the learned behavior yet. Not yet tried: a state-loss-only
 ablation (`grid_weight=0`, `boundary_weight=0`) to isolate whether
 `token_state_loss` alone actually prevents vanishing, before assuming
 the structural argument was wrong.
+
+**Ablation run: `token_state_loss` in isolation (job 2852, `scripts/polaris_train_token_v9.sh`,
+`grid_weight=0`, `boundary_weight=0`, `state_weight=1.0`, otherwise
+identical recipe to job 2851) → `checkpoints/token_model_h12_v9.pt`.**
+Answers the open question from job 2851 cleanly: **not** a
+drowned-out-by-grid/boundary-loss problem -- with those terms fully
+zeroed, the give-up-to-vanishing pattern is still there. Unbiased
+review: early rollout (steps 0-5) tracks ground truth closely (small
+~1-2 cell drift by step 5, and the model visibly smooths over a
+close-contact/collision event around step 3 that ground truth renders
+sharply). Late rollout diverges the same way as job 2851 -- by step 8,
+2 of 4 objects have vanished; the dropout persists through step 20.
+Surviving objects keep moving (not stalled) but drift further from
+ground truth as steps increase.
+
+New lead the reviewer surfaced, not present in prior job read-outs:
+**dropout specifically targets the lowest-contrast/faintest ball
+first**, consistently, across both this run and (re-reading job
+2851's report) job 2851 as well. This points away from "the loss
+function's incentive structure" as the sole explanation -- a
+coordinate-space loss with no background to hide behind still lost
+this ball, so the failure may be upstream: `find_token_positions`'
+`detect_threshold` clipping a low-intensity ball's detection, or
+`centroid_near`'s observation correction being systematically weaker
+for low-signal tokens, either of which would starve that token's
+hidden state of a usable observation and let it drift/decay under
+self-feed regardless of what the training loss rewards. Not yet
+investigated: check whether the same ball index is the one that
+vanishes across multiple seeds/runs, and whether its rasterized PROB
+peak is measurably lower than its siblings' at frame 0. Video:
+`videos/token_model_v9_state_loss_only_rollout.mp4`, diagnostic grid:
+`videos/token_model_v9_diagnostic_grid.png`.
