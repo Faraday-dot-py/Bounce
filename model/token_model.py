@@ -53,13 +53,21 @@ class TokenModel(torch.nn.Module):
 
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
-                 max_init_speed=20.0, velocity_weight=0.0):
+                 max_init_speed=20.0, velocity_weight=0.0, max_expansions=6):
         super().__init__()
         self.n = n
         self.radius = radius
         self.dt = dt
         self.detect_threshold = detect_threshold
         self.observation_weight = observation_weight
+        # Give-up search width for centroid_near's per-step observation
+        # read. Raised from centroid_near's own default (3) now that
+        # territory masking (see model.token_detect.territory_mask) makes
+        # a wider search structurally safe -- it can no longer cross into
+        # a neighbouring token's territory and steal its mass, which is
+        # what made widening this unsafe before (see
+        # docs/superpowers/specs/2026-09-23-token-territory-masking-design.md).
+        self.max_expansions = max_expansions
         # Explicit velocity re-anchoring: finite-difference of two
         # consecutive observation reads (centroid_near), same idea
         # init_tokens already uses across frame0/frame1, just applied every
@@ -186,7 +194,7 @@ class TokenModel(torch.nn.Module):
             if occluding[i] or w == 0.0:
                 continue
             op = centroid_near(observed_frame[0], positions[i], self.radius,
-                                margin=self.detect_margin,
+                                margin=self.detect_margin, max_expansions=self.max_expansions,
                                 all_positions=positions, self_idx=i)
             obs_pos[i] = op
             corrected_pos[i] = (1 - w) * positions[i] + w * op

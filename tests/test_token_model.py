@@ -269,6 +269,32 @@ def test_occluding_tokens_still_ignore_observation_with_territory_masking():
     assert torch.allclose(new_pos, positions, atol=1e-5)
 
 
+def test_token_model_defaults_to_widened_give_up_search():
+    model = TokenModel(n=20, radius=0.75, dt=0.15)
+    assert model.max_expansions == 6
+
+
+def test_step_recovers_drifted_token_with_widened_search():
+    # A token has drifted 6 cells from its ball -- beyond the old
+    # max_expansions=3's reach at radius=0.75/margin=1.0 (base_half=2,
+    # +1 cell/expansion -> max half=5, misses a 6-cell drift by 1) but
+    # within the widened default (max_expansions=6 -> max half=8). With
+    # the widened default it must recover the ball via observation
+    # correction rather than giving up.
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    true_ball_pos = torch.tensor([[10.0, 10.0]])
+    drifted_position = torch.tensor([[16.0, 10.0]])  # 6 cells off
+    velocities = torch.zeros(1, 2)
+    hidden = torch.zeros(1, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(true_ball_pos, torch.zeros(1, 2), n, radius)
+
+    _, _, _, _, obs_pos = model.step(drifted_position, velocities, hidden, observed_frame)
+
+    assert torch.allclose(obs_pos[0], true_ball_pos[0], atol=0.5)
+
+
 def test_init_tokens_avoids_duplicate_frame0_match():
     n, radius, dt = 20, 1.5, 0.15
     model = TokenModel(n=n, radius=radius, dt=dt)
