@@ -1835,3 +1835,61 @@ reassessment (e.g., a softer/probabilistic territory boundary instead of
 a hard nearest-token partition, or reverting to unmasked windows for
 low-confidence/high-uncertainty tracked positions) before spending more
 GPU-hours on this line.
+
+## 2026-09-23 (14:45) — v14 final review: root cause confirmed, fix applied, v9 baseline number corrected
+
+Dispatched a fresh reviewer (Opus, no prior context) for the standard
+whole-branch review before merging the territory-masking branch. It
+found and directly verified the actual mechanism behind v14's
+regression, superseding the "leading hypothesis" (Voronoi split through
+a token's own mass) logged above -- that hypothesis does not hold at
+inference; the real mechanism is simpler and more fundamental:
+
+**Under self-feed, a hard territory mask has no recovery path once a
+token's own rendered mass leaves its own territory (e.g. gravity carries
+it off-grid).** Before this fix existed, an unmasked widened search
+could still grab a *neighbour's* mass and drag the token's tracked
+position back onto the grid -- the "identity theft" this design targeted
+was, empirically, also the only mechanism that ever recovered an
+off-grid token. Masking closed that path with nothing to replace it, so
+every token that ever falls off-grid under self-feed now stays lost
+forever instead of occasionally recovering via a wrong-neighbour
+correction. The reviewer confirmed this directly: 62 of v14's 66 dropped
+tokens end off-grid (x≈20-25 on a 20-cell grid, consistent with gravity),
+not on-grid and merged/vanished as the earlier hypothesis assumed.
+
+**The logged "v9 baseline = 8" number was also measured under the wrong
+code.** That re-measurement used v9's *weights* but v14's *inference
+code* (masking + `max_expansions=6`). Under v9's own original inference
+settings (no masking, `max_expansions=3`), the reviewer measured 6 --
+matching the originally-logged number. Most of the v9(6)->v14(66) gap
+reflects what the network *learned* under masked training, not what
+masking does at inference time alone; the reviewer's inference-only
+ablation (same v9/v14 weights, masking and `max_expansions` varied)
+found masking makes both checkpoints' *inference* worse on their own
+(v9: 6->8, v14: 48->66), and that widening `max_expansions` without
+masking *helps* both (v9: 6->3, v14: 48->32) -- i.e. Task 6's widening
+was a real, verified improvement on its own; it only became a no-op once
+combined with a mask that had no fallback.
+
+**Fix applied** (commits `e72f790`, `f7076b2`): `centroid_near` now
+retries unmasked when the masked search finds nothing anywhere (own
+territory completely empty at every expansion) before giving up --
+restoring the old recovery path only as a last resort, so a token that
+still has any of its own mass is still protected from a neighbour's
+(the property masking exists for), but a token with genuinely nothing
+left of its own is no longer stuck. `TokenModel.territory_masking`
+defaults to `False` (was implicitly `True` with no way to disable) --
+existing checkpoints, including v9, now get byte-for-byte unchanged
+inference unless explicitly opted in via `--territory-masking`
+(`token_train.py` and all token-model render/diagnostic scripts).
+`scripts/diagnose_token_dropout.py`'s `--trace` window-mass mirror was
+also stale (no masking, hardcoded `max_expansions=3`) and has been
+corrected to match whatever settings the model under test actually uses.
+
+**Not yet retrained with the fix.** v14's checkpoint was trained under
+the old (fallback-less) masked code and is not representative of what
+the corrected design would learn -- v15 (fixed code, `--territory-masking`
+enabled, otherwise identical v9 recipe) is the real test of whether
+territory masking helps once it can no longer strand a token
+permanently. See the next entry for that result.
