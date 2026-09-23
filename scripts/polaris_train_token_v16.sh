@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --time=01:00:00
+#SBATCH --time=03:00:00
 #SBATCH --output=bounce-token-model-v16-%j.log
 
 set -euo pipefail
@@ -25,7 +25,9 @@ echo "[$(date -Iseconds)] tests passed"
 # (unmasked, best checkpoint so far) with gravity=0 and a fixed 15 balls
 # instead of the usual 2-6, same n=20 grid. No --dataset-cache since the
 # cached dataset was generated at gravity=9 with 2-6 balls -- this needs
-# a fresh generation to match.
+# a fresh generation to match. Time limit raised to 3h vs the usual 1h:
+# job 2862 (killed) showed 15-ball batches run much slower than the
+# usual 2-6 ball recipe (heavier radius-graph attention/rasterization).
 echo "[$(date -Iseconds)] starting training"
 python -m model.token_train \
   --n 20 --horizon 12 --epochs 3 \
