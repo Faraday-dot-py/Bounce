@@ -1394,17 +1394,50 @@ close-together balls). New regression test confirms this: fails
 This does **not** explain seed 4750's remaining duplicate, though:
 re-inspecting its *raw* (pre-`centroid_near`) peak coordinates shows
 4 well-separated cells (`(11,18) (13,7) (15,9) (18,11)`, all >2 cells
-apart -- no tie, no near-tie), one of which, `(13,7)` at prob 0.38, is
-a secondary local maximum in the splat tail of the real ball at
-`(15,9)`/true position ~(14.95, 9.08), not a distinct ball. Both raw
-peaks independently refine via `centroid_near` toward the same true
-ball (hence the ~(14.2, 8.2) duplicate seen in earlier logging) --
-this is a shape artifact in `bounce.splat_all`'s own kernel (a
-secondary bump/ridge in the decay tail, not the model's rasterizer),
-still unexplained and not addressed by either fix in this session.
-48-seed dropout count unchanged at 6 after this fix (expected -- it
-targets exact ties, not this separate tail-artifact mechanism). Next:
-inspect `bounce.splat_all`'s kernel shape directly (not a neural net,
-so this should be a straightforward function-shape read, not another
-model-behavior investigation) to see why it's non-monotonic far enough
-from center to create a second local max.
+apart -- no tie, no near-tie), each of which correctly corresponds to
+a distinct true ball (`(13,7)` -> ball 3 at true (13.24, 6.69), 0.39
+cells off; `(15,9)` -> ball 1 at true (14.95, 9.08), 0.09 cells off).
+Initially misread this as a splat-kernel tail artifact -- wrong.
+`splat_ball` (`bounce.py`) is a strictly monotonic linear-falloff disk
+bounded to radius 0.75 from its own center, so a single ball cannot
+produce mass 2+ cells from itself; `(13,7)`'s value can only come from
+ball 3's own splat. Checked directly.
+
+**Actual mechanism, confirmed by printing the window
+`centroid_near` reads from `(13, 7)`**: `centroid_near`'s window
+(`ceil(radius + margin)` = `ceil(0.75 + 1.0)` = 2 cells) extends far
+enough from `(13, 7)` to reach `(15, 9)` -- 2.83 cells away, inside
+the window's 2√2 ≈ 2.83-cell diagonal reach. Ball 3's own mass in
+that window totals ~0.4, but ball 1 (closer to its own integer grid
+cell, hence a higher post-saturation value at `(15,9)`: 0.58) sits
+right at the window's corner and dominates the intensity-weighted
+centroid, pulling `(13,7)`'s refined position onto ~(14.2, 8.2) --
+right on top of ball 1's own refined detection, silently erasing
+ball 3's. This is exactly the "neighbour contaminates the centroid
+readout" scenario `TokenModel._gate_radius`'s docstring already
+describes and the occlusion gate already exists to prevent -- just
+not applied here, because `find_token_positions`' peak-refinement
+step (used only at init) has no gate at all, unlike per-step tracking.
+
+**Fix (`model/token_detect.py`, `find_token_positions`)**: gate
+`centroid_near` refinement on the same `occluding_mask` threshold
+`TokenModel._gate_radius` uses at tracking time, evaluated on the
+raw (pre-refinement) peak coordinates. A peak flagged as occluding by
+a neighbour keeps its coarse integer-cell coordinate instead of being
+refined -- less precise, but immune to hijacking, the same tradeoff
+the tracking-time gate already accepts. Regression test reproduces the
+real seed-4750 pair directly via `bounce.splat_all` (not synthetic):
+fails (one ball's detection lost) before the fix, passes after.
+95/95 tests pass.
+
+**Result on v9 checkpoint (no retrain, same 48-seed diagnostic)**:
+seed 4750 confirmed fixed directly (both balls now detected
+independently: `(13,7)` and `(15,9)`, no longer collapsed). Aggregate
+dropout count unchanged at 6/48 -- seed 4761 newly crosses the
+dropout threshold, offsetting seed 4750's fix. Given this session's
+run of real, verified mechanism fixes (11 -> 8 -> 6 -> 6, each
+individually confirmed against its own root cause), the flat aggregate
+here looks like normal seed-to-seed variance in a 6/48 tail rather
+than a sign this fix didn't work -- worth re-running the full 48-seed
+sweep after the next fix to see if the trend resumes, rather than
+reading too much into one flat step.

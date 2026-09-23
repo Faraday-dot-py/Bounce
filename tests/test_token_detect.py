@@ -65,6 +65,27 @@ def test_find_token_positions_breaks_ties_at_half_integer_center():
     assert detected.shape[0] == 1
 
 
+def test_find_token_positions_does_not_let_a_neighbour_hijack_a_weaker_peak():
+    # Reproduces a real dropout case directly (seed 4750, see
+    # docs/debugging/experiment-log.md): two balls ~2.85 cells apart,
+    # each correctly detected as its own raw NMS peak, but one sits
+    # closer to its own grid cell (larger own-cell mass) than the
+    # other. Without gating, `centroid_near`'s window from the weaker
+    # ball's peak reaches into the stronger one's mass and gets pulled
+    # there entirely, losing the weaker ball's detection.
+    balls = [
+        {"x": 14.952715875383788, "y": 9.078687174437743, "vx": 0.0, "vy": 0.0},
+        {"x": 13.241050987763971, "y": 6.6910605299027734, "vx": 0.0, "vy": 0.0},
+    ]
+    prob = _prob_channel(balls, 20, 0.75)
+    detected = find_token_positions(prob, radius=0.75)
+    assert detected.shape[0] == 2
+    dists = torch.cdist(detected, torch.tensor([[b["x"], b["y"]] for b in balls]))
+    # every true ball has its own nearby detection (not both detections
+    # collapsed onto the same one, leaving the other ball uncovered)
+    assert dists.min(dim=0).values.max() < 1.5
+
+
 def test_find_token_positions_handles_empty_grid():
     prob = torch.zeros((20, 20))
     detected = find_token_positions(prob, radius=0.75)

@@ -3,6 +3,8 @@ import math
 import torch
 import torch.nn.functional as F
 
+from model.token_gate import occluding_mask
+
 
 def centroid_near(prob, position, radius, margin=1.0, max_expansions=3):
     """Intensity-weighted centroid of `prob` (n, n) within a square window
@@ -77,14 +79,30 @@ def _suppress_tied_peaks(coords, prob, radius):
     return coords[torch.tensor(kept, dtype=torch.long, device=coords.device)]
 
 
-def find_token_positions(prob, radius, threshold=0.1):
+def find_token_positions(prob, radius, threshold=0.1, margin=1.0):
     """Detect one token per isolated ball via non-max suppression over a
     window sized to one ball's footprint, refined by `centroid_near`.
     Used only for sequence-start initialization -- per-step tracking uses
     `centroid_near` directly against each token's predicted position
     instead of re-running full-grid detection. Two balls closer together
     than the window are detected as a single peak, an accepted rare
-    failure mode (see design spec's Token initialization section)."""
+    failure mode (see design spec's Token initialization section).
+
+    Raw peaks within `centroid_near`'s own contamination distance of
+    each other (`radius + margin`, the same threshold `TokenModel`'s
+    occlusion gate uses during tracking -- see `TokenModel._gate_radius`)
+    skip refinement and keep their coarse integer coordinate instead.
+    Without this, a weaker ball's peak can get its centroid pulled
+    entirely into a stronger neighbour's mass -- reproduced directly
+    (docs/debugging/experiment-log.md): two true balls 2.85 cells apart
+    each detected correctly at the raw-peak stage, but the weaker one's
+    `centroid_near` window reached far enough to catch the stronger
+    ball's much larger mass in one corner, dragging its refined position
+    on top of the stronger ball's and silently losing its own detection.
+    A coarse (integer-cell) position is less precise but can't be
+    hijacked this way, and per-step tracking's own occlusion gate already
+    accepts the same tradeoff (skipping the correction rather than
+    risking a contaminated one) once dynamics take over."""
     n = prob.shape[0]
     k = max(1, int(round(radius)) * 2 + 1)
     padded = prob.unsqueeze(0).unsqueeze(0)
@@ -95,4 +113,8 @@ def find_token_positions(prob, radius, threshold=0.1):
     if coords.shape[0] == 0:
         return torch.zeros((0, 2), dtype=prob.dtype, device=prob.device)
     coords = _suppress_tied_peaks(coords, prob, radius)
-    return torch.stack([centroid_near(prob, c, radius) for c in coords])
+    occluding = occluding_mask(coords, radius + margin)
+    return torch.stack([
+        coords[i] if occluding[i] else centroid_near(prob, coords[i], radius, margin=margin)
+        for i in range(coords.shape[0])
+    ])
