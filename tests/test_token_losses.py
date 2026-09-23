@@ -60,6 +60,20 @@ def test_token_grid_loss_give_up_prediction_is_not_free():
     assert torch.allclose(loss_correct, torch.tensor(0.0), atol=1e-6)
 
 
+def test_boundary_loss_empty_tokens_returns_zero():
+    # A rare degenerate rollout sample (init_tokens detects zero balls at
+    # frame 1) previously produced NaN here: `.mean()` on a zero-element
+    # tensor is NaN in PyTorch, and 0.0 * nan is still nan -- this leaked
+    # into training logs even at boundary_weight=0.0 (job 2857/v13,
+    # docs/debugging/experiment-log.md). Confirmed harmless to trained
+    # weights (backward through a zero-cardinality path never actually
+    # multiplies a real nan into any parameter's gradient), but the loss
+    # value itself should still be a real, poison-free zero.
+    positions = torch.zeros((0, 2))
+    loss = boundary_loss(positions, n=20)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
 def test_boundary_loss_is_zero_for_in_range_positions():
     n = 20
     positions = torch.tensor([[5.0, 5.0], [0.0, 19.9], [10.0, 10.0]])

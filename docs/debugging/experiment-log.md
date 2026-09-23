@@ -1693,3 +1693,82 @@ in particular may be converging tokens onto each other (identity
 collapse) rather than only vanishing them independently, which the
 existing instrumentation doesn't directly measure and would be worth
 checking before any future work on this line.
+
+## 2026-09-23 (12:46) — v13 (`window_collapse_loss`, job 2857): worse than all four previous checkpoints, and by a mechanism that confirms the v11 identity-collapse suspicion
+
+Implemented the untested direction (a) from the v9-v12 synthesis above:
+an explicit loss penalty (`window_collapse_loss`, `model/token_losses.py`)
+when a token's own rasterized PROB mass near its tracked position falls
+below a floor, reading the step's own `pred_grid` (not the detached
+self-fed `observed_frame`) so gradient flows through the same forward
+pass that produced both. 8 new tests, 105/105 passing before launch.
+v13 (job 2857): identical recipe to v9's state-loss-only ablation plus
+`--collapse-weight 0.5 --collapse-floor 0.3`.
+
+**Result: dropout 34/48 — worse than v9 (6), v10 (10), v12 (27), and
+v11 (30). The single worst checkpoint produced across all five
+attempts.** Self-fed position error at step 18: 6.35 cells (vs v9's
+5.50); teacher-forced error stays flat/small (0.33-0.79 across all 20
+steps) -- the now-repeated finding that single-step dynamics accuracy
+is never the problem holds a fifth time.
+
+**Training-log NaN, root-caused and fixed, unrelated to the A/B
+result**: the job's log showed intermittent `loss=nan` in per-epoch/
+per-window prints (3 occurrences across 30k steps). Traced (not
+guessed) to a pre-existing bug in `boundary_loss`: a rare zero-token
+rollout step (`init_tokens` detects no balls) hits `.mean()` on an
+empty tensor, which is NaN in PyTorch, and `0.0 * nan` is still nan --
+so this leaked into logs even at this recipe's `boundary_weight=0.0`.
+Confirmed harmless to the actual trained weights before concluding
+anything from the run: backward through a zero-cardinality path can't
+multiply a real nan into any parameter's gradient (verified both by
+direct PyTorch experiment and by checking the downloaded checkpoint's
+state_dict for NaN/Inf -- none found). Fixed with an empty-token guard
+matching `token_state_loss`'s and `window_collapse_loss`'s existing
+pattern, regression test added (106/106 passing), uploaded to Polaris.
+This bug predates v13 and almost certainly affected v9-v12's logs too
+(their logs have since rotated off Polaris and couldn't be checked),
+but never affected any of those checkpoints' actual weights for the
+same zero-cardinality reason.
+
+**Unbiased visual review** (`videos/token_model_v13_diagnostic_grid.png`,
+fresh subagent, no hypothesis primed): blob count and fidelity match
+ground truth through step ~3, matching v9-v12's read. From step 5
+onward the failure mode is **not** vanishing to an isolated blob (v9's
+and v12's shape) but **merged, blended multi-color patches at object
+boundaries** -- by step 12, "several balls have collapsed into a
+single multi-colored patch"; by step 20, a "merged yellow+teal
+checker-like patch (two adjacent mismatched-color cells) rather than a
+clean single-color object." No frame-wide checkerboard/streaking --
+the artifact is localized to where balls overlap or pass close to each
+other.
+
+**This is the mechanism, not just a worse number, and it directly
+confirms the v11 suspicion flagged at the end of the last synthesis**:
+`window_collapse_loss` penalizes a token for having *no* mass nearby,
+but doesn't care *whose* mass satisfies it. The cheapest way to escape
+the penalty when a token's own ball is hard to track isn't to keep
+tracking it better -- it's to drift onto a *neighboring* ball's mass,
+which is already-existing, real, non-zero PROB the penalty is happy to
+accept. That produces exactly the observed failure shape: two tokens
+converging onto one ball's mass (merged patch, wrong color mixing)
+instead of one token vanishing cleanly. The fix this A/B was designed
+around made the underlying incentive problem worse, not better: it
+didn't just fail to reward correct tracking, it rewards a specific
+wrong behavior (identity theft) that wasn't as strongly incentivized
+before.
+
+**Four single-variable attempts at this symptom (v10, v11, v12, v13),
+each in a different loss/mechanism location, all worse than baseline,
+one now actively worse by a wide margin with a distinct and understood
+failure mode.** Per this project's own systematic-debugging discipline,
+this is well past the "stop patching, question the architecture"
+threshold flagged after v10-v12 -- reinforced now, not resolved, by
+v13. Direction (b) from the earlier synthesis -- removing the give-up
+branch structurally (no "return position unchanged" absorbing state in
+`centroid_near`) -- remains the only genuinely untested direction, but
+v13's failure mode is a specific warning for it too: any fix in this
+family needs to penalize (or structurally prevent) a token latching
+onto a *neighbor's* mass, not just penalize having none. Flagging for
+human decision before further GPU-hours on this line, per the same
+judgment call made after v12.

@@ -119,7 +119,19 @@ def boundary_loss(positions, n, margin=0.0):
 
     Grows quadratically with distance past the boundary, zero otherwise --
     same shape as occupancy_weighted_mse's peak/mass terms, so it composes
-    the same way as an additive penalty."""
+    the same way as an additive penalty.
+
+    A zero-token rollout step (init_tokens detected no balls) previously
+    hit `.mean()` on an empty tensor, which is NaN in PyTorch -- and
+    `weight * nan` is still nan even at weight 0.0, so this leaked into
+    training logs regardless of boundary_weight (job 2857/v13, see
+    docs/debugging/experiment-log.md). Harmless to trained weights in
+    practice (backward through a zero-cardinality path can't actually
+    multiply a real nan into any parameter's gradient), but the loss
+    value itself should be a real zero, matching token_state_loss's and
+    window_collapse_loss's existing empty-token guards."""
+    if positions.shape[0] == 0:
+        return positions.new_zeros(())
     lower = torch.relu(margin - positions)
     upper = torch.relu(positions - (n - margin))
     return (lower ** 2 + upper ** 2).mean()
