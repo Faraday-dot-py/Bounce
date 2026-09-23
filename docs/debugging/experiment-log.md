@@ -1544,4 +1544,53 @@ epochs on 10k samples is 30k total gradient steps, fewer than the
 project default recipe's 2000 samples x 50 epochs = 100k -- the
 "confirmed architectural" conclusion in the 2026-09-22 entries above
 was drawn from a checkpoint trained on a third of the default's total
-updates. Result pending.
+updates.
+
+**Result: more epochs alone makes it WORSE, not better.** Job 2855
+(`checkpoints/token_model_h12_v11.pt`, 15 epochs / 150k gradient steps,
+5x v9's budget) on the same 48-seed diagnostic: self-fed position
+error is flat-to-slightly-worse vs v9 at every step (6.15 vs 5.50
+cells at step 18; 5.18 vs 5.45 at step 9 -- within noise), teacher-
+forced error is unchanged (still flat, 0.2-0.9 cells). But dropout
+count is dramatically worse: **30/48 seeds** (8/7/8/7 by ball index),
+5x v9's 6/48. Rules out "v9 was just undertrained" cleanly -- this
+isn't a training-budget confound, more training on this exact recipe
+actively teaches the give-up-to-vanishing shortcut harder, consistent
+with `occupancy_weighted_mse`-style give-up incentives job 2840
+originally found, except here even with `grid_weight=0` and
+`token_state_loss` as the only real signal, more optimization against
+that objective still finds a way to make more tokens disappear. Read:
+whatever objective/architecture combination is being optimized here
+has "some balls vanish" as a *better*, not worse, local optimum once
+given more steps to find it, at least for a nontrivial fraction of
+episodes.
+
+**Job 2856 (`checkpoints/token_model_h12_v12.pt`), `state_vel_weight`
+0.1 -> 1.0 (token_state_loss weights velocity error equally with
+position instead of 10x down-weighted)**: still running as this entry
+is written; result appended below once known.
+
+**Three single-variable fixes tried tonight, all motivated by direct
+measurement rather than guessing, none of them helping so far**:
+explicit trained-in velocity correction (v10: dropout 6->10/48,
+position error flat), 5x more training on the identical recipe (v11:
+dropout 6->30/48, position error flat-to-worse), and the vel_weight
+result pending (v12). Per this project's own systematic-debugging
+discipline: v10 and v11 are two independent, clean negative results
+against the same symptom (self-fed give-up dropout), both worse than
+baseline, not just "no better" -- that's already the signal to stop
+proposing more minor-variant patches of this shape and ask whether the
+symptom itself is being mis-modeled. Candidate reframing, **not yet
+tested**: this may not be a "correction" problem (nudge position/
+velocity back toward truth) at all -- it may be that `token_state_loss`
++ self-feed, optimized harder, is discovering that letting a token's
+window go empty and freezing/drifting is cheaper than continuing to
+track a hard-to-observe ball, i.e. the model is finding a genuine
+local optimum of the stated objective, not failing to reach one. If
+so, the fix isn't a better correction mechanism (position or velocity)
+at all -- it's removing the incentive to vanish, e.g. an explicit
+penalty for `window_total` going to zero (currently nothing in the
+loss ever looks at detection/observation strength, only ground-truth
+state error), or making token permanence itself a structural
+guarantee rather than an emergent property the network has to learn
+not to violate.
