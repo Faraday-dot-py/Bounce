@@ -1893,3 +1893,57 @@ the corrected design would learn -- v15 (fixed code, `--territory-masking`
 enabled, otherwise identical v9 recipe) is the real test of whether
 territory masking helps once it can no longer strand a token
 permanently. See the next entry for that result.
+
+## 2026-09-23 (15:20) — v15 (fixed territory masking + fallback, job 2859): regression eliminated, but still worse than the unmasked baseline
+
+`token_model_h12_v15.pt` (job 2859): identical recipe
+to v9, plus `--territory-masking` (now the opt-in flag, using
+`centroid_near`'s unmasked-fallback fix from the previous entry).
+Training completed cleanly (no NaN, loss curve matches v9/v14's family).
+
+**Re-verified v9's true baseline under the now-fixed default (no
+masking) code: 3/48** -- lower than both the originally-logged 6 and the
+previously-reported 8 (which the last entry already explained was
+measured under always-on masking with no way to disable it). 3 is the
+correct number to compare against now that `territory_masking` defaults
+to `False` and the diagnostic script's own `window_total_at` mirror was
+also fixed to match.
+
+**v15 result: 16/48 dropout with `--territory-masking` enabled** (ball
+breakdown `{0: 4, 1: 3, 2: 3, 3: 6}`) -- categorically better than v14's
+66 (the regression from the fallback-less bug is gone), but still worse
+than v9's unmasked 3.
+
+**Unbiased subagent review of the diagnostic grid**
+(`videos/token_model_v15_diagnostic_grid.png`, no hypothesis primed):
+blobs track well for the first 1-2 steps, then "progressively blur and
+bleed into neighbouring objects when two blobs come close together,
+sometimes averaging into an intermediate color," with the apparent
+object count dropping below ground truth's steady 4 by mid-rollout; no
+checkerboarding or high-frequency noise. This is a *third* distinct
+failure shape across the three checkpoints tried this line: v13
+(uncontrolled theft, merged multi-color patches), v14 (clean vanishing,
+tokens fall off-grid with no recovery), v15 (color-bleed at close
+approach, milder than v13 but the same family) -- consistent with the
+unmasked fallback re-engaging exactly when two tokens are near each
+other and one's territory happens to empty out, which is also the
+highest-risk moment for a real collision.
+
+**Read: territory masking, even correctly implemented, does not net
+help this metric at the current recipe (3 epochs, state-loss-only).**
+The fallback that fixes v14's permanent-loss regression is also what
+reopens a milder version of the original identity-blending problem,
+specifically at the moment (close approach) the whole design exists to
+protect. This is not a bug to chase further with another single-variable
+tweak -- three checkpoints (v13, v14, v15) have now each surfaced a
+different failure mode from a different point in the same design space
+(loss penalty, hard mask, masked+fallback), all worse than the unmasked
+v9 baseline on this metric. Per this project's systematic-debugging
+discipline, flagging for a human decision on whether to continue
+investing in the territory/masking family of fixes, revisit the
+loss-space direction instead, or treat v9 as the working baseline while
+this line stays parked.
+
+Checkpoints and videos: `checkpoints/token_model_h12_v15.pt`,
+`videos/token_model_v15_diagnostic_grid.png`,
+`videos/token_model_v15_rollout.mp4`.
