@@ -1667,3 +1667,29 @@ function redesign vs. hyperparameter/mechanism swap) and are exactly
 the kind of change that deserves a human decision before spending more
 GPU-hours chasing it -- flagging here rather than guessing which one
 to build unattended.
+
+**Unbiased visual review** (`videos/token_model_v{9,10,11,12}_night_diagnostic_grid.png`,
+fresh subagent, no hypothesis primed, per
+[[feedback_auto_run_video_analysis_on_sim_finish]]) corroborates the
+quantitative numbers: all four checkpoints track ground truth closely
+through step 3, then lose distinct blobs (not blur/streak/checkerboard
+-- surviving blobs stay crisp) starting around step 5. Ranked by blob
+count surviving to step 20: v9 (3 blobs, most spread out) > v11 (3,
+but bunched into one overlapping cluster) > v10 (2) > v12 (1, worst --
+collapses to a single isolated blob by step 5 and never regains a
+second one). This matches the dropout-count ranking (v9=6 < v10=10 <
+v12=27 < v11=30) for v9/v10/v12, but v11's "3 blobs by step 20" visual
+read sits oddly against it having the *worst* dropout count of the
+four -- likely explained by the reviewer counting undifferentiated
+blob clusters, not per-token identity: `diagnose_token_dropout.py`
+matches each token to its ground-truth ball once and tracks that
+specific identity, so several tokens collapsing onto nearly the same
+position (which the trace already shows happening via `SWAP->ballN`
+markers in earlier entries) would read as "multiple blobs" visually
+while still counting as multiple individual dropouts numerically. Net
+effect: the visual review doesn't overturn the quantitative ranking,
+but adds a concrete additional failure shape worth remembering -- v11
+in particular may be converging tokens onto each other (identity
+collapse) rather than only vanishing them independently, which the
+existing instrumentation doesn't directly measure and would be worth
+checking before any future work on this line.
