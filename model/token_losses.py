@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from model.losses import occupancy_weighted_mse
@@ -59,6 +61,52 @@ def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0
     pos_loss = ((final_pos - target_pos) ** 2).mean()
     vel_loss = ((final_vel - target_vel) ** 2).mean()
     return pos_loss + vel_weight * vel_loss
+
+
+def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3):
+    """Penalizes a token whose own rasterized PROB mass near its tracked
+    position falls below `floor`, closing the give-up shortcut identified
+    in docs/debugging/experiment-log.md's v9-v12 synthesis: neither
+    token_state_loss nor token_grid_loss ever looks at whether a token's
+    own rasterization deposits detectable mass at the position it
+    reports, so a token that drifts its window empty (dropout) costs
+    nothing beyond whatever state-space error that drift happens to
+    cause -- vanishing is free. This reads `prob` (rasterize_tokens'
+    PROB channel for THIS step's own prediction, not the observed/source
+    frame) at each token's own `positions`, so the gradient flows back
+    through the same forward pass that produced both, unlike the
+    observation branch's `centroid_near` reads which are detached during
+    self-feed.
+
+    Window size mirrors centroid_near's un-widened base window
+    (`ceil(radius + margin)`) -- deliberately not its widened retry, so a
+    token doesn't get this penalty's credit for centroid_near's separate
+    recovery leniency. `floor` is calibrated against a single
+    well-centered ball's own window mass (~0.63 on-lattice, ~0.22 at a
+    half-integer offset -- see scripts/calibrate_window_total.py-style
+    check) so normal sub-pixel jitter stays well clear of it while an
+    actually-collapsed token's near-zero mass triggers it hard.
+
+    The window's location is derived from a detached, rounded position
+    (matching centroid_near) -- this penalizes the network for the mass
+    it puts down, not for moving the position to chase existing mass."""
+    if positions.shape[0] == 0:
+        return positions.new_zeros(())
+    n = prob.shape[0]
+    half = int(math.ceil(radius + margin))
+    totals = []
+    for i in range(positions.shape[0]):
+        cx = int(round(float(positions[i, 0].detach())))
+        cy = int(round(float(positions[i, 1].detach())))
+        i_lo, i_hi = max(0, cx - half), min(n - 1, cx + half)
+        j_lo, j_hi = max(0, cy - half), min(n - 1, cy + half)
+        if i_lo > i_hi or j_lo > j_hi:
+            totals.append(prob.new_zeros(()))
+            continue
+        totals.append(prob[i_lo:i_hi + 1, j_lo:j_hi + 1].sum())
+    total = torch.stack(totals)
+    deficit = torch.relu(floor - total)
+    return (deficit ** 2).mean()
 
 
 def boundary_loss(positions, n, margin=0.0):

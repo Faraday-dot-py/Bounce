@@ -111,3 +111,43 @@ def test_token_rollout_loss_state_weight_scales_state_term():
         state_weight=1.0, grid_weight=0.0, boundary_weight=0.0,
     )
     assert not torch.allclose(loss_low, loss_high)
+
+
+def test_token_rollout_loss_collapse_weight_scales_collapse_term():
+    # A freshly-initialized model's tokens start on real detected mass, so
+    # collapse_weight=0 vs >0 should differ once the recurrence has moved
+    # positions off-lattice across a few steps -- mirrors
+    # test_token_rollout_loss_state_weight_scales_state_term's pattern.
+    torch.manual_seed(4738)
+    dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=5)
+    grid_seq, state_seq = dataset[0]
+    model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+
+    torch.manual_seed(0)
+    loss_low = token_rollout_loss(
+        model, grid_seq, state_seq, horizon=5, sampling_p=0.0, weights=weights,
+        state_weight=0.0, grid_weight=0.0, boundary_weight=0.0, collapse_weight=0.0,
+    )
+    torch.manual_seed(0)
+    loss_high = token_rollout_loss(
+        model, grid_seq, state_seq, horizon=5, sampling_p=0.0, weights=weights,
+        state_weight=0.0, grid_weight=0.0, boundary_weight=0.0, collapse_weight=5.0,
+    )
+    assert not torch.allclose(loss_low, loss_high)
+    assert loss_high >= loss_low
+
+
+def test_token_rollout_loss_collapse_weight_zero_matches_no_collapse_call():
+    torch.manual_seed(4738)
+    dataset = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(2, 3), seed=4738, horizon=3)
+    grid_seq, state_seq = dataset[0]
+    model = TokenModel(n=20, radius=0.75, dt=0.15, hidden_dim=8, neighbor_radius=3.0)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+
+    with patch("model.token_train.window_collapse_loss") as mock_collapse_loss:
+        mock_collapse_loss.return_value = torch.tensor(1000.0)
+        loss_zero_weight = token_rollout_loss(
+            model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights, collapse_weight=0.0
+        )
+    mock_collapse_loss.assert_not_called()

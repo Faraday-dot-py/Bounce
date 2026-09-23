@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from model.token_dataset import BounceTokenSequenceDataset, load_dataset_samples
 from model.token_match import match_tokens_to_state
 from model.token_model import TokenModel
-from model.token_losses import boundary_loss, token_grid_loss, token_state_loss
+from model.token_losses import boundary_loss, token_grid_loss, token_state_loss, window_collapse_loss
 
 
 def sampling_probability(epoch, ramp_epochs):
@@ -19,7 +19,8 @@ def sampling_probability(epoch, ramp_epochs):
 def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16,
                         boundary_weight=0.1, boundary_margin=0.0,
-                        state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1):
+                        state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1,
+                        collapse_weight=0.0, collapse_floor=0.3, collapse_margin=1.0):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -47,7 +48,17 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
     `boundary_loss` operates on tracked positions directly, at every
     rollout step, not just the rasterized output -- added because job
     2847 (peak_weight=0.5 alone) still showed tokens drifting off-grid
-    and dissolving by step ~12-20."""
+    and dissolving by step ~12-20.
+
+    `window_collapse_loss` (0 weight by default, off) is the v13 A/B
+    against v9-v12's synthesis in docs/debugging/experiment-log.md: none
+    of the existing terms above ever look at whether a token's own
+    rasterized PROB mass near its tracked position is actually
+    detectable, so give-up dropout costs nothing beyond whatever
+    state-space error it happens to cause. Reads `pred_grid` (this
+    step's own prediction), not `observed_frame`/`source_grid`, so
+    gradient flows through the same forward pass rather than a possibly
+    self-fed-and-detached observation."""
     device = next(model.parameters()).device
     grid_seq = grid_seq.to(device)
     weights = weights.to(device)
@@ -77,6 +88,10 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
         total_loss = total_loss + boundary_weight * boundary_loss(
             positions, model.n, margin=boundary_margin
         )
+        if collapse_weight > 0.0:
+            total_loss = total_loss + collapse_weight * window_collapse_loss(
+                pred_grid[0], positions, model.radius, margin=collapse_margin, floor=collapse_floor
+            )
         self_feed = random.random() < sampling_p
         observed_frame = pred_grid.detach() if self_feed else target_grid
     return total_loss / num_steps
@@ -113,6 +128,7 @@ def train(args):
                 boundary_weight=args.boundary_weight, boundary_margin=args.boundary_margin,
                 state_weight=args.state_weight, grid_weight=args.grid_weight,
                 state_vel_weight=args.state_vel_weight,
+                collapse_weight=args.collapse_weight, collapse_floor=args.collapse_floor,
             )
             opt.zero_grad()
             loss.backward()
@@ -165,6 +181,12 @@ def main():
     # Weight token_grid_loss ramps to (from 0) over the same sampling_p
     # schedule as self-feed -- see token_rollout_loss's docstring.
     ap.add_argument("--grid-weight", type=float, default=0.1)
+    # window_collapse_loss weight -- 0.0 (off) keeps existing behavior
+    # unchanged. See token_rollout_loss's docstring and
+    # docs/debugging/experiment-log.md's v9-v12 synthesis for why this
+    # exists: v13's A/B test of the "give-up is free" hypothesis.
+    ap.add_argument("--collapse-weight", type=float, default=0.0)
+    ap.add_argument("--collapse-floor", type=float, default=0.3)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--checkpoint", type=str, default="checkpoint_token.pt")
     ap.add_argument("--log-every", type=int, default=100,

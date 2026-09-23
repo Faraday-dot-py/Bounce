@@ -1,6 +1,6 @@
 import torch
 
-from model.token_losses import boundary_loss, token_grid_loss, token_state_loss
+from model.token_losses import boundary_loss, token_grid_loss, token_state_loss, window_collapse_loss
 
 
 def test_token_grid_loss_is_zero_for_identical_grids():
@@ -172,3 +172,65 @@ def test_token_state_loss_gradient_flows_to_positions_and_velocities():
     loss.backward()
     assert final_pos.grad is not None and (final_pos.grad != 0).all()
     assert final_vel.grad is not None and (final_vel.grad != 0).all()
+
+
+def test_window_collapse_loss_is_zero_when_mass_present_at_token():
+    n = 10
+    prob = torch.zeros(n, n)
+    prob[5, 5] = 0.8
+    positions = torch.tensor([[5.0, 5.0]])
+    loss = window_collapse_loss(prob, positions, radius=0.75, floor=0.3)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_window_collapse_loss_penalizes_empty_window():
+    # Token claims to be at (5, 5) but the rasterized PROB channel has no
+    # mass anywhere near it -- this is the give-up shortcut identified in
+    # docs/debugging/experiment-log.md: token_state_loss never looks at
+    # whether the token's own rasterization actually deposits detectable
+    # mass at its tracked position, so a vanished token costs nothing extra.
+    n = 10
+    prob = torch.zeros(n, n)
+    positions = torch.tensor([[5.0, 5.0]])
+    loss = window_collapse_loss(prob, positions, radius=0.75, floor=0.3)
+    assert loss > 0
+
+
+def test_window_collapse_loss_grows_as_mass_shrinks():
+    n = 10
+    positions = torch.tensor([[5.0, 5.0]])
+    prob_high = torch.zeros(n, n)
+    prob_high[5, 5] = 0.6
+    prob_low = torch.zeros(n, n)
+    prob_low[5, 5] = 0.1
+    loss_high = window_collapse_loss(prob_high, positions, radius=0.75, floor=0.3)
+    loss_low = window_collapse_loss(prob_low, positions, radius=0.75, floor=0.3)
+    assert loss_low > loss_high
+
+
+def test_window_collapse_loss_ignores_mass_outside_window():
+    # Mass exists in the grid, just nowhere near this token -- shouldn't
+    # get credit for a different token's (or a stray) blob.
+    n = 20
+    positions = torch.tensor([[2.0, 2.0]])
+    prob = torch.zeros(n, n)
+    prob[15, 15] = 0.9
+    loss = window_collapse_loss(prob, positions, radius=0.75, margin=1.0, floor=0.3)
+    assert loss > 0
+
+
+def test_window_collapse_loss_empty_tokens_returns_zero():
+    prob = torch.zeros(5, 5)
+    positions = torch.zeros((0, 2))
+    loss = window_collapse_loss(prob, positions, radius=0.75)
+    assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_window_collapse_loss_gradient_flows_to_prob():
+    n = 10
+    prob = torch.zeros(n, n, requires_grad=True)
+    positions = torch.tensor([[5.0, 5.0]])
+    loss = window_collapse_loss(prob, positions, radius=0.75, floor=0.3)
+    loss.backward()
+    assert prob.grad is not None
+    assert prob.grad[5, 5] != 0.0
