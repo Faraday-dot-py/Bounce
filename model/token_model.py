@@ -185,7 +185,9 @@ class TokenModel(torch.nn.Module):
         for i in range(positions.shape[0]):
             if occluding[i] or w == 0.0:
                 continue
-            op = centroid_near(observed_frame[0], positions[i], self.radius)
+            op = centroid_near(observed_frame[0], positions[i], self.radius,
+                                margin=self.detect_margin,
+                                all_positions=positions, self_idx=i)
             obs_pos[i] = op
             corrected_pos[i] = (1 - w) * positions[i] + w * op
             if prev_obs_pos is not None and vw > 0.0:

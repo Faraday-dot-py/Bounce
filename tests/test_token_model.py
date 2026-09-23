@@ -228,6 +228,47 @@ def test_assign_velocity_pairs_keeps_unambiguous_match():
     assert bool(keep[0])
 
 
+def test_step_observation_does_not_steal_neighbours_mass():
+    # Two non-occluding tokens: TokenModel's actual occlusion threshold is
+    # 2*_gate_radius() = 2*(radius + detect_margin) = 2*(0.75+1.0) = 3.5,
+    # not 2*radius -- these two are 4.0 apart, clear of that gate. But
+    # centroid_near's un-widened window (base_half=ceil(radius+margin)=2,
+    # +1/expansion up to max_expansions=3 -> reaches half=5) still spans
+    # far enough to overlap without territory masking. Token 0's tracked
+    # position has drifted off its own (now-empty) ball; without masking
+    # it would pull in token 1's real mass and "correct" onto it. With
+    # masking, it must stay put (give up) instead of moving onto token 1's
+    # ball.
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    positions = torch.tensor([[9.0, 10.0], [13.0, 10.0]])  # 4.0 apart -> not occluding (threshold 3.5)
+    velocities = torch.zeros(2, 2)
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    # Ground truth: token 0's ball has actually moved away/vanished from
+    # this frame; only token 1's ball is present, at its tracked position.
+    observed_frame = rasterize_tokens(torch.tensor([[13.0, 10.0]]), torch.zeros(1, 2), n, radius)
+
+    new_pos, _, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+
+    # Token 0 must NOT have been pulled toward token 1's mass.
+    assert torch.norm(obs_pos[0] - positions[0]) < 0.1
+    assert torch.norm(new_pos[0] - torch.tensor([13.0, 10.0])) > 1.0
+
+
+def test_occluding_tokens_still_ignore_observation_with_territory_masking():
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    positions = torch.tensor([[10.0, 10.0], [10.6, 10.0]])
+    velocities = torch.zeros(2, 2)
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    observed_frame = torch.rand(3, n, n)
+
+    new_pos, new_vel, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+    assert torch.allclose(new_pos, positions, atol=1e-5)
+
+
 def test_init_tokens_avoids_duplicate_frame0_match():
     n, radius, dt = 20, 1.5, 0.15
     model = TokenModel(n=n, radius=radius, dt=dt)
