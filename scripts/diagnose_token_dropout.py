@@ -25,8 +25,9 @@ from model.token_match import match_tokens_to_state
 from model.token_gate import occluding_mask
 
 
-def load_model(checkpoint_path, n, hidden_dim, neighbor_radius):
-    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0):
+    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
+                        velocity_weight=velocity_weight)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -101,12 +102,13 @@ def main():
     ap.add_argument("--base-seed", type=int, default=4738)
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
+    ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
     ap.add_argument("--trace", action="store_true",
                      help="print per-step window_total/occlusion for each dropped token")
     args = ap.parse_args()
 
-    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius)
+    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight)
 
     dropout_ball_idx = []
     frame1_peak_by_ball = {}
@@ -142,6 +144,7 @@ def main():
         num_tokens = positions.shape[0]
         trace = {t: [] for t in range(num_tokens)}  # (step, window_total, occluding, gt_err, nearest_ball, nearest_err)
         observed = g1
+        prev_obs_pos = positions
         with torch.no_grad():
             for step in range(args.num_steps - 1):
                 occ = occluding_mask(positions, model._gate_radius())
@@ -158,7 +161,9 @@ def main():
                     nearest_ball = int(all_err.argmin())
                     nearest_err = float(all_err[nearest_ball])
                     trace[t].append((step, wt, bool(occ[t]), gt_err, nearest_ball, nearest_err))
-                positions, velocities, hidden, pred_grid = model.step(positions, velocities, hidden, observed)
+                positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                    positions, velocities, hidden, observed, prev_obs_pos
+                )
                 observed = pred_grid
         last_peak = [peak_prob_at(observed[0], positions[t]) for t in range(positions.shape[0])]
 

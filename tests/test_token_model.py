@@ -29,7 +29,7 @@ def test_step_at_init_coasts_at_constant_velocity_when_observation_weight_is_zer
     hidden = torch.zeros(1, model.dynamics.hidden_dim)
     observed_frame = torch.zeros(3, n, n)  # unused when observation_weight=0.0
 
-    new_pos, new_vel, new_hidden, pred_grid = model.step(positions, velocities, hidden, observed_frame)
+    new_pos, new_vel, new_hidden, pred_grid, _ = model.step(positions, velocities, hidden, observed_frame)
 
     assert torch.allclose(new_pos, positions + velocities * dt, atol=1e-5)
     assert torch.allclose(new_vel, velocities, atol=1e-5)
@@ -45,7 +45,7 @@ def test_step_output_grid_matches_direct_rasterization():
     hidden = torch.zeros(1, model.dynamics.hidden_dim)
     observed_frame = torch.zeros(3, n, n)
 
-    new_pos, new_vel, _, pred_grid = model.step(positions, velocities, hidden, observed_frame)
+    new_pos, new_vel, _, pred_grid, _ = model.step(positions, velocities, hidden, observed_frame)
     expected_grid = rasterize_tokens(new_pos, new_vel, n, radius)
     assert torch.allclose(pred_grid, expected_grid)
 
@@ -61,7 +61,7 @@ def test_occluding_tokens_ignore_observation_even_at_full_observation_weight():
     hidden = torch.zeros(2, model.dynamics.hidden_dim)
     observed_frame = torch.rand(3, n, n)  # arbitrary/irrelevant if gate works
 
-    new_pos, new_vel, _, _ = model.step(positions, velocities, hidden, observed_frame)
+    new_pos, new_vel, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
 
     assert torch.allclose(new_pos, positions, atol=1e-5)  # coast (velocity=0), obs ignored
 
@@ -79,7 +79,7 @@ def test_step_blends_toward_observation_for_non_occluding_token():
     true_obs_pos = torch.tensor([[10.6, 10.0]])
     observed_frame = rasterize_tokens(true_obs_pos, torch.zeros(1, 2), n, radius)
 
-    new_pos, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+    new_pos, _, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
 
     assert torch.allclose(new_pos, true_obs_pos, atol=0.1)
     assert not torch.allclose(new_pos, positions, atol=0.1)
@@ -112,7 +112,7 @@ def test_isolated_token_tracks_its_velocity_under_default_observation_weight():
     for _ in range(6):
         observed_frame = rasterize_tokens(true_pos, velocity, n, radius)
         previous = positions
-        positions, velocities, hidden, _ = model.step(positions, velocities, hidden, observed_frame)
+        positions, velocities, hidden, _, _ = model.step(positions, velocities, hidden, observed_frame)
         true_pos = true_pos + velocity * dt
         assert torch.allclose(positions - previous, velocity * dt, atol=0.05)
         assert torch.allclose(velocities, velocity, atol=1e-5)
@@ -132,9 +132,48 @@ def test_gate_suppresses_observation_inside_the_detection_window_band():
     hidden = torch.zeros(2, model.dynamics.hidden_dim)
     observed_frame = torch.rand(3, n, n)  # arbitrary/irrelevant if gate works
 
-    new_pos, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+    new_pos, _, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
 
     assert torch.allclose(new_pos, positions, atol=1e-5)
+
+
+def test_step_velocity_correction_blends_toward_two_frame_observed_velocity():
+    # Isolated token (no occlusion), true velocity [1, 0] but the tracked
+    # `velocities` input is wrong ([0, 0], as if drifted); with
+    # velocity_weight=1.0 and prev_obs_pos one dt behind the current
+    # observation, the corrected velocity must move toward the
+    # finite-difference of the two observed positions, not stay at the
+    # wrong input value.
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0, velocity_weight=1.0)
+    true_vel = torch.tensor([[1.0, 0.0]])
+    positions = torch.tensor([[10.0, 10.0]])
+    velocities = torch.zeros(1, 2)
+    hidden = torch.zeros(1, model.dynamics.hidden_dim)
+    prev_obs_pos = positions - true_vel * dt
+    observed_frame = rasterize_tokens(positions, true_vel, n, radius)
+
+    _, new_vel, _, _, obs_pos = model.step(positions, velocities, hidden, observed_frame, prev_obs_pos)
+
+    assert torch.allclose(obs_pos, positions, atol=0.1)
+    assert torch.allclose(new_vel, true_vel, atol=0.2)
+
+
+def test_step_velocity_correction_off_by_default_and_without_prev_obs_pos():
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 1.5, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, observation_weight=1.0)
+    assert model.velocity_weight == 0.0
+    positions = torch.tensor([[10.0, 10.0]])
+    velocities = torch.tensor([[0.0, 0.0]])
+    hidden = torch.zeros(1, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(positions, torch.tensor([[1.0, 0.0]]), n, radius)
+
+    # No prev_obs_pos passed at all -- must not error, and velocity must
+    # be unaffected (velocity_weight=0.0 default).
+    _, new_vel, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+    assert torch.allclose(new_vel, velocities, atol=1e-5)
 
 
 def test_init_tokens_zeros_velocity_for_implausible_nearest_match():

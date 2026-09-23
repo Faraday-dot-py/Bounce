@@ -44,8 +44,11 @@ def rollout(model, frame0, frame1, num_steps):
     with torch.no_grad():
         positions, velocities, hidden = model.init_tokens(g0, g1)
         observed = g1
+        prev_obs_pos = positions
         for _ in range(num_steps - 1):
-            positions, velocities, hidden, pred_grid = model.step(positions, velocities, hidden, observed)
+            positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                positions, velocities, hidden, observed, prev_obs_pos
+            )
             frames.append(pred_grid.numpy().transpose(1, 2, 0))
             observed = pred_grid
     return frames
@@ -59,6 +62,7 @@ if __name__ == "__main__":
     ap.add_argument("--num-balls", type=int, default=4)
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=3.0)
+    ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--out", type=str, default="/tmp/token_artifact_grid.png")
     args = ap.parse_args()
@@ -67,7 +71,7 @@ if __name__ == "__main__":
     gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, num_steps)
 
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
-                        neighbor_radius=args.neighbor_radius)
+                        neighbor_radius=args.neighbor_radius, velocity_weight=args.velocity_weight)
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], num_steps)

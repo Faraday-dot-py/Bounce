@@ -24,8 +24,9 @@ from model.token_model import TokenModel
 from render_token_rollout_video import simulate_ground_truth, rollout  # noqa: E402
 
 
-def load_model(checkpoint_path, n, hidden_dim, neighbor_radius):
-    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0):
+    model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
+                        velocity_weight=velocity_weight)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -50,13 +51,14 @@ if __name__ == "__main__":
     ap.add_argument("--num-steps", type=int, default=30)
     ap.add_argument("--hidden-dim", type=int, default=32)
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
+    ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--seeds", type=int, nargs="+", default=list(range(4738, 4738 + 16)))
     args = ap.parse_args()
 
     if len(args.seeds) != 16:
         raise ValueError(f"expected exactly 16 seeds, got {len(args.seeds)}")
 
-    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius)
+    model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight)
 
     all_gt_frames = []
     all_pred_frames = []

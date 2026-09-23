@@ -53,13 +53,33 @@ class TokenModel(torch.nn.Module):
 
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
-                 max_init_speed=20.0):
+                 max_init_speed=20.0, velocity_weight=0.0):
         super().__init__()
         self.n = n
         self.radius = radius
         self.dt = dt
         self.detect_threshold = detect_threshold
         self.observation_weight = observation_weight
+        # Explicit velocity re-anchoring: finite-difference of two
+        # consecutive observation reads (centroid_near), same idea
+        # init_tokens already uses across frame0/frame1, just applied every
+        # step instead of only at init. Defaults to 0 (off) so existing
+        # checkpoints/tests are unaffected -- see
+        # docs/debugging/experiment-log.md's velocity-compounding
+        # investigation for why this exists: position gets an explicit
+        # observation correction every step, velocity never did, and
+        # measurement showed velocity error growing ~5x over 9 self-fed
+        # steps while position error (which depends on velocity through
+        # `final_pos = corrected_pos + velocities * dt + delta_pos`) grew
+        # in lockstep. A naive inference-only version of this (spliced onto
+        # a checkpoint trained without it) made things WORSE, not better --
+        # TokenDynamics's learned delta_vel implicitly relies on velocity
+        # following its own internal trajectory, and perturbing it
+        # externally is off-distribution for a frozen checkpoint. This is
+        # only expected to help if the network is trained with it present
+        # from the start, same as position's observation correction always
+        # has been.
+        self.velocity_weight = velocity_weight
         # Must match centroid_near's own `margin` default -- the gate width
         # below is derived from the detection window's extent, so the two
         # must not drift apart silently.
@@ -123,7 +143,7 @@ class TokenModel(torch.nn.Module):
         hidden = torch.zeros((pos1.shape[0], self.dynamics.hidden_dim), dtype=dtype, device=device)
         return pos1, velocities, hidden
 
-    def step(self, positions, velocities, hidden, observed_frame):
+    def step(self, positions, velocities, hidden, observed_frame, prev_obs_pos=None):
         """Advances one dt. `observed_frame` is the grid at the SAME time
         as the input `positions`/`velocities` (time t) -- ground truth
         during teacher-forced training, the model's own previous
@@ -133,10 +153,21 @@ class TokenModel(torch.nn.Module):
         time-(t+1) prediction against a time-t frame is a category error,
         and differencing a time-t observation against the time-t input
         position yields not a velocity but ~0 by construction. A single
-        frame carries no velocity information at all, so velocity is
-        corrected only implicitly, through what the dynamics network
-        learns from clean before/after pairs during training -- never
-        synthesized from a single-frame position delta divided by dt."""
+        frame carries no velocity information at all, so a *within-step*
+        finite difference can't recover it -- but `prev_obs_pos`, the
+        observation read one step ago (time t-1), can: `(obs_pos - prev_obs_pos)
+        / dt` is a genuine two-frame velocity estimate, same idea
+        `init_tokens` already uses at frame0/frame1, applied every step.
+        This is blended into `velocities` at `self.velocity_weight` (0 by
+        default -- see __init__), gated by the same occlusion mask as
+        position, before the dynamics network sees it, matching how
+        position's own observation correction happens before, not after,
+        `self.dynamics`. Returns `obs_pos` (this step's observation read,
+        or the unchanged input position where gated/skipped) so the
+        caller can pass it back in as next step's `prev_obs_pos`; the
+        first call in a rollout has no prior observation, so pass the
+        detected position from `init_tokens` (frame 1) as `prev_obs_pos`
+        or leave it `None` to skip velocity correction that step."""
         # The gate is evaluated against the current positions, i.e. the
         # same time instant as `observed_frame`: the question it answers is
         # whether THIS frame's observation is contaminated by a neighbour,
@@ -147,16 +178,23 @@ class TokenModel(torch.nn.Module):
         # early suppression.)
         occluding = occluding_mask(positions, self._gate_radius())
         corrected_pos = positions.clone()
+        corrected_vel = velocities.clone()
+        obs_pos = positions.clone()
         w = self.observation_weight
+        vw = self.velocity_weight
         for i in range(positions.shape[0]):
             if occluding[i] or w == 0.0:
                 continue
-            obs_pos = centroid_near(observed_frame[0], positions[i], self.radius)
-            corrected_pos[i] = (1 - w) * positions[i] + w * obs_pos
+            op = centroid_near(observed_frame[0], positions[i], self.radius)
+            obs_pos[i] = op
+            corrected_pos[i] = (1 - w) * positions[i] + w * op
+            if prev_obs_pos is not None and vw > 0.0:
+                obs_vel = (op - prev_obs_pos[i]) / self.dt
+                corrected_vel[i] = (1 - vw) * velocities[i] + vw * obs_vel
 
-        delta_pos, delta_vel, new_hidden = self.dynamics(corrected_pos, velocities, hidden)
-        final_pos = corrected_pos + velocities * self.dt + delta_pos
-        final_vel = velocities + delta_vel
+        delta_pos, delta_vel, new_hidden = self.dynamics(corrected_pos, corrected_vel, hidden)
+        final_pos = corrected_pos + corrected_vel * self.dt + delta_pos
+        final_vel = corrected_vel + delta_vel
 
         next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
-        return final_pos, final_vel, new_hidden, next_grid
+        return final_pos, final_vel, new_hidden, next_grid, obs_pos

@@ -68,7 +68,7 @@ def test_token_rollout_loss_self_feed_decided_per_step():
 
     assert mock_step.call_count == 3
     # step 2's call used ground-truth frame 2 as observed_frame (step 1 not self-fed)
-    _, _, _, observed_frame_2 = mock_step.call_args_list[1].args
+    _, _, _, observed_frame_2, _ = mock_step.call_args_list[1].args
     assert torch.equal(observed_frame_2, grid_seq[2])
 
 

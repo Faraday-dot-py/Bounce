@@ -55,13 +55,14 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
     positions, velocities, hidden = model.init_tokens(grid_seq[0], grid_seq[1])
     match_idx = match_tokens_to_state(positions, state_seq[1])
     observed_frame = grid_seq[1]
+    prev_obs_pos = positions
     total_loss = grid_seq.new_zeros(())
     num_steps = max(horizon - 1, 1)
     grid_weight_effective = grid_weight * sampling_p
     for step in range(num_steps):
         source_grid = observed_frame
-        positions, velocities, hidden, pred_grid = model.step(
-            positions, velocities, hidden, observed_frame
+        positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+            positions, velocities, hidden, observed_frame, prev_obs_pos
         )
         target_grid = grid_seq[step + 2]
         target_state = state_seq[step + 2]
@@ -96,7 +97,8 @@ def train(args):
     loader = DataLoader(dataset, batch_size=None, shuffle=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
-                        neighbor_radius=args.neighbor_radius).to(device)
+                        neighbor_radius=args.neighbor_radius,
+                        velocity_weight=args.velocity_weight).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -141,6 +143,10 @@ def main():
     # graph neighbor is also gated off from observation correction (see
     # docs/debugging/experiment-log.md, job 2840).
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
+    # Explicit velocity re-anchoring from consecutive observation reads
+    # (see model/token_model.py TokenModel.__init__'s docstring); 0.0
+    # keeps existing behavior unchanged.
+    ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--boundary-weight", type=float, default=0.1)
