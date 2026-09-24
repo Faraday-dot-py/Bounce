@@ -50,9 +50,9 @@ impulse + fixed symplectic integrator, GRU residual only. Not yet implemented.
 - Beyond 10M the run is tiled (strip tiling with halos): exact per-step vs global
   (~3e-5) but uses local softmax max; full rollouts diverge chaotically in dense
   piles (expected, not a benchmark artifact).
-- 1B run (job 2917, ~12.4-12.9 s/tick so far): hidden state fp16 because fp32 = 144 GB
+- 1B run (job 2917): 3825 s total, 12.75 s/tick median, 121.4 GB peak, 250 strips, 12.7 ns/ball/tick. Hidden state fp16 because fp32 = 144 GB
   > 141 GB GPU. CAVEAT: fp16 hidden differs from the fp32 used in all smaller runs;
-  report it. Fill final 1B total/ms per tick/peak mem here when job finishes.
+  report it.
 - Comparison to physics sims: same O(N) class; ~13 ns/ball/tick is CPU-sim range,
   est. 3-10x slower than tuned analytic GPU codes (recollection, NOT measured).
   A fair baseline needs an analytic GPU sim at equal N on same hardware (not run).
