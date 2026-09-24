@@ -2,6 +2,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 
 from model.token_net import TokenDynamics
+from model.token_track_query import TrackQueryDynamics
 from model.token_detect import find_token_positions, centroid_near
 from model.token_gate import occluding_mask
 from model.token_rasterize import rasterize_tokens
@@ -54,7 +55,7 @@ class TokenModel(torch.nn.Module):
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
-                 territory_masking=False):
+                 territory_masking=False, track_query=False):
         super().__init__()
         self.n = n
         self.radius = radius
@@ -108,7 +109,20 @@ class TokenModel(torch.nn.Module):
         # must not drift apart silently.
         self.detect_margin = detect_margin
         self.max_init_speed = max_init_speed
-        self.dynamics = TokenDynamics(hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+        # Opt-in architecture swap (see
+        # docs/superpowers/specs/2026-09-23-token-track-query-design.md):
+        # replaces occluding_mask/centroid_near/blending in `step` with
+        # learned self- and cross-attention. Defaults to False so v9's
+        # exact code path stays byte-for-byte unchanged and reachable as
+        # the reference baseline.
+        self.track_query = track_query
+        if track_query:
+            self.dynamics = TrackQueryDynamics(
+                hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
+                radius=radius, margin=detect_margin, max_expansions=max_expansions,
+            )
+        else:
+            self.dynamics = TokenDynamics(hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
 
     def _gate_radius(self):
         """The occlusion gate must be wider than the physical contact
@@ -191,6 +205,16 @@ class TokenModel(torch.nn.Module):
         first call in a rollout has no prior observation, so pass the
         detected position from `init_tokens` (frame 1) as `prev_obs_pos`
         or leave it `None` to skip velocity correction that step."""
+        if self.track_query:
+            delta_pos, delta_vel, new_hidden, obs_pos = self.dynamics(
+                positions, velocities, hidden, observed_frame
+            )
+            final_pos = positions + velocities * self.dt + delta_pos
+            final_vel = velocities + delta_vel
+            next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
+            return final_pos, final_vel, new_hidden, next_grid, obs_pos
+
+        # Existing v9 path -- byte-for-byte unchanged below.
         # The gate is evaluated against the current positions, i.e. the
         # same time instant as `observed_frame`: the question it answers is
         # whether THIS frame's observation is contaminated by a neighbour,

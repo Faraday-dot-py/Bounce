@@ -358,3 +358,49 @@ def test_init_tokens_avoids_duplicate_frame0_match():
     positions, velocities, _ = model.init_tokens(frame0, frame1)
     assert positions.shape[0] == 2
     assert torch.isfinite(velocities).all()
+
+
+def test_track_query_step_returns_same_five_tuple_shape():
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, hidden_dim=8, track_query=True)
+    positions = torch.tensor([[10.0, 10.0], [12.0, 8.0]])
+    velocities = torch.tensor([[1.0, -0.5], [0.0, 1.0]])
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(positions, velocities, n, radius)
+
+    new_pos, new_vel, new_hidden, pred_grid, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+
+    assert new_pos.shape == (2, 2)
+    assert new_vel.shape == (2, 2)
+    assert new_hidden.shape == (2, model.dynamics.hidden_dim)
+    assert pred_grid.shape == (3, n, n)
+    assert obs_pos.shape == (2, 2)
+    assert not torch.isnan(new_pos).any()
+
+
+def test_track_query_step_coasts_at_constant_velocity_when_delta_head_is_zero_init():
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, hidden_dim=8, track_query=True)
+    positions = torch.tensor([[10.0, 10.0]])
+    velocities = torch.tensor([[2.0, -1.0]])
+    hidden = torch.zeros(1, model.dynamics.hidden_dim)
+    observed_frame = rasterize_tokens(positions, velocities, n, radius)
+
+    new_pos, new_vel, _, _, _ = model.step(positions, velocities, hidden, observed_frame)
+
+    assert torch.allclose(new_pos, positions + velocities * dt, atol=1e-5)
+    assert torch.allclose(new_vel, velocities, atol=1e-5)
+
+
+def test_track_query_model_uses_track_query_dynamics():
+    from model.token_track_query import TrackQueryDynamics
+    model = TokenModel(n=20, radius=0.75, dt=0.15, track_query=True)
+    assert isinstance(model.dynamics, TrackQueryDynamics)
+
+
+def test_default_model_still_uses_token_dynamics():
+    from model.token_net import TokenDynamics
+    model = TokenModel(n=20, radius=0.75, dt=0.15)
+    assert isinstance(model.dynamics, TokenDynamics)
