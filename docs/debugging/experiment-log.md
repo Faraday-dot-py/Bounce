@@ -2092,3 +2092,34 @@ Artifacts: `checkpoints/token_model_h24_v18.pt`, `results/eval_*.json`,
 `videos/token_model_v18_diagnostic_grid.png`,
 `videos/token_model_v9_long_diagnostic_grid.png`,
 `videos/token_model_v18_rollout.mp4` (mp4 gitignored).
+
+### Trivial baselines for the v18 comparison (2026-09-24)
+
+`scripts/eval_trivial_baselines.py`, same seeds/scenarios. stay = frozen at
+frame-1 ball positions; centroid = oracle true ball centroid each step;
+velocity = constant frame-1->2 velocity, clamped.
+
+20x20, 4 balls, 48 seeds (err @20 / @100 / @300):
+
+| baseline | @20 | @100 | @300 |
+|---|---|---|---|
+| stay | 5.83 | 9.55 | 10.20 |
+| centroid (oracle) | 6.33 | 5.47 | 5.39 |
+| velocity | 7.30 | 11.58 | 12.57 |
+
+50x50, 100 balls, 8 seeds:
+
+| baseline | @20 | @100 | @300 |
+|---|---|---|---|
+| stay | 22.49 | 25.78 | 25.34 |
+| centroid (oracle) | 13.18 | 16.74 | 18.09 |
+| velocity | 19.64 | 28.11 | 32.40 |
+
+Read: the v18 "win" is much smaller than the model table suggested. In
+distribution v18 @300 (8.63) beats stay (10.20) by 15% and v9 (15.12) by
+43%, but the oracle centroid (5.39) beats every model. OOD v18 @300 (26.16)
+is no better than stay (25.34). v9 @20 (5.83) equals stay @20 (5.83) exactly
+-- at step 20 no model beats standing still in distribution (v18 5.07, v17
+5.10 are ~13% better). v9's late error (15.12/41.28) is worse than stay, so
+its edge over the old baseline is really that v9 diverges. Free rollout
+fixes divergence/fading; it does not add tracking skill.
