@@ -2651,3 +2651,45 @@ step 50 -13%) while v34, trained the same length with the smaller weight, does
 not: the |v| magnitude loss weight matters (0.3 >> 0.1), not just extra
 training. v33 is the best model so far. v35 (speed weight 1.0) and v36
 (control at 0.3) continue from v33.
+
+### v35 / v36 / v37, and held-out seeds (2026-09-24)
+
+Continuations from v33, 3000 batches at 40-step unrolls: v35 speed-weight 1.0,
+v36 speed-weight 0.3 (same recipe, continued), v37 speed-weight 0.3 plus
+`--state-vel-weight 0.5`. Standard seeds (4738+), position error at step
+1/2/3/5/10/15/20/50/100:
+
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v33 | 0.090 | 0.096 | 0.117 | 0.168 | 0.578 | 1.512 | 2.559 | 6.63 | 7.89 |
+| v35 | 0.093 | 0.106 | 0.129 | 0.196 | 0.738 | 2.074 | 3.315 | 7.14 | 8.06 |
+| v36 | 0.090 | 0.109 | 0.144 | 0.214 | 0.657 | 1.846 | 2.857 | 7.16 | 7.68 |
+| v37 | 0.091 | 0.106 | 0.137 | 0.210 | 0.681 | 1.983 | 3.205 | 6.90 | 8.30 |
+
+None beat v33 on the standard seeds. Selection bias: v33 was chosen by
+scoring many checkpoints on these same 48 seeds, and v36 (v33's recipe
+continued) is 10-15% worse at steps 10-20, so checkpoint-to-checkpoint noise
+in this fine-tune stage is of that size. Held-out seeds (base seed 9000, 48
+seeds, `results/heldout_*.json`), same protocol:
+
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v18 | 0.452 | 0.654 | 0.834 | 1.185 | 1.918 | 3.172 | 4.890 | 7.43 | 7.38 |
+| v25 | 0.100 | 0.121 | 0.140 | 0.192 | 0.592 | 1.745 | 2.955 | 7.17 | 8.12 |
+| v30 | 0.091 | 0.103 | 0.113 | 0.147 | 0.431 | 1.506 | 2.816 | 6.75 | 7.41 |
+| v31 | 0.094 | 0.109 | 0.126 | 0.178 | 0.493 | 1.591 | 2.965 | 6.80 | 7.69 |
+| v33 | 0.094 | 0.104 | 0.116 | 0.151 | 0.456 | 1.552 | 2.945 | 7.23 | 8.05 |
+| v34 | 0.095 | 0.106 | 0.122 | 0.168 | 0.504 | 1.710 | 3.126 | 7.38 | 7.75 |
+| v35 | 0.097 | 0.110 | 0.127 | 0.180 | 0.557 | 1.793 | 3.423 | 7.11 | 7.76 |
+| v36 | 0.097 | 0.118 | 0.143 | 0.202 | 0.565 | 1.845 | 3.383 | 7.34 | 7.67 |
+| v37 | 0.096 | 0.116 | 0.141 | 0.196 | 0.498 | 1.527 | 2.838 | 7.34 | 7.91 |
+
+Honest reading: the fine-tuned family (v30, v31, v33, v37) sits in a band
+of err@5 0.15-0.20, @10 0.43-0.50, @20 2.8-3.0 on held-out seeds, all far
+better than v25 (0.192 / 0.592 / 2.955 -- mostly at step 10) and v18 (1.185 /
+1.918 / 4.890, i.e. -87% / -77% / -40%); within the family the ordering is
+not reliable. v33 is a reasonable headline (correct token counts in all
+seeds via ball_split; held-out 0.094 / 0.151 / 0.456 / 2.945 at steps 1 / 5 / 10
+/ 20). Without ball_split the held-out set has 1 mismatch seed (9010).
+Speed-weight 1.0 (v35) is too strong; 0.1 (v34) adds little; 0.3 is best but
+the effect over noise is modest.
