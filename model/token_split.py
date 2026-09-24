@@ -202,6 +202,9 @@ def detect_balls(frame0, frame1, radius=0.75, dt=0.15, tau=1e-3, refine=True, re
     if len(seeds) > max_tokens:
         P = torch.from_numpy(seeds).float()
         V = torch.from_numpy(_safe_velocities(f1, seeds, w1, radius)).float()
+        if refine and len(seeds):
+            P = refine_positions(frame0.float(), frame1.float(), P, V, radius=radius, dt=dt)
+            V = torch.from_numpy(_safe_velocities(f1, P.double().numpy(), w1, radius)).float()
         return (P, V, np.inf) if return_all else (P, V)
     pos, sse = np.zeros((0, 2)), np.inf
     if len(seeds):

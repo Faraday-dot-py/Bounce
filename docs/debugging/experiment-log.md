@@ -2610,3 +2610,23 @@ Mean speed @20/@50/@100 (truth 6.0 / 6.9 / 7.9): v30 4.8 / 4.4 / 4.8; v32
 5.1 / 5.5 / 4.3; v31 5.0 / 5.4 / 5.9. Repeated fine-tune rounds keep
 improving energy retention (speed @50 4.4 -> 5.4-5.5) while position error
 holds. v31 (all token counts correct) is the best model so far.
+
+### v31 out of distribution and frame review (2026-09-24)
+
+OOD (50x50, 100 balls, 8 seeds, 100 steps; `eval_v31_ood_short.json`).
+First run 0.414 / 1.291 / 2.917 / 8.918 at step 1/5/10/20 (worse than v25's
+0.169 / 0.707 / 2.222 / 8.433): `detect_balls` returned early above
+`max_tokens` (12 detections) without applying `refine_positions`. Fixed (the
+early path now refines); rerun: 0.159 / 0.691 / 2.183 / 8.666 / 19.32 /
+21.72 at 1/5/10/20/50/100, equal to v25 within noise. Stay baseline @20 22.49,
+oracle centroid 13.18.
+
+Unbiased subagent frame review of v31 (seeds 4738-4740, steps 0-30, no
+hypothesis primed): blobs stay distinct with roughly the right brightness
+through step ~8-12; first clear departure at step 12 (seed 4738: a bright ball
+replaced by a dim 2x2 haze); balls late in the rollout sit lower than truth
+(seeds 4739, 4738) and their rebounds upward are less clear or lagged; seed
+4740 tracks best (close through step 16, positions off by a few cells by step
+30 with four distinct blobs, one matching at top right); no uniform drift
+direction; dim haze blobs (fading) seen in 4738 (steps 12, 30) and 4739
+(step 16). Grids: scratchpad `g_v31_{4738,4739,4740}.png`.
