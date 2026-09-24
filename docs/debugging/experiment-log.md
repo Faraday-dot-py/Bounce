@@ -2206,3 +2206,28 @@ Probes: `scripts/probe_y_bias.py`, `probe_y_bias_source.py`,
   y<3 +1.33, near y>16 -1.89), bounces are weak (hand-built test: vy -3 in,
   ~0.8 out), and pair collisions do not conserve momentum (2-ball head-on:
   total vy wanders +-0.4, truth exactly 0).
+
+### v19 stepwise curriculum vs v18 (2026-09-24)
+
+Job 2878 (`scripts/polaris_train_token_v19.sh`): stepwise 1..20 curriculum,
+plateau advance (3%, 1000-batch chunks, <=4 chunks/stage), 25% replay,
+21m43s. Stage losses (mean per-step over the unroll): stage 1 2.07->1.81,
+stage 4 3.23->3.11, stage 8 5.78->5.39, stage 18 12.2->11.9; the stage-1
+floor of ~1.8 is high for a 1-step prediction.
+
+`scripts/eval_free_rollout.py`, 48 seeds, 20x20, 4 balls, mean position
+error at step (`results/eval_v18_short.json`, `eval_v19_short.json`):
+
+| step | v18 | v19 |
+|---|---|---|
+| 1 | 0.431 | 0.424 |
+| 2 | 0.641 | 0.640 |
+| 3 | 0.833 | 0.863 |
+| 5 | 1.176 | 1.269 |
+| 10 | 2.038 | 2.174 |
+| 15 | 3.582 | 3.714 |
+| 20 | 5.073 | 5.192 |
+
+Read: the curriculum gives no improvement (slightly worse at 5-20). Step-1
+error is 0.43 for both, above the 0.25 init position error, so the floor is
+set by init-state error (velocity error 2.10), not by the training regime.
