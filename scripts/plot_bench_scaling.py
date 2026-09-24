@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--inputs", nargs="+", default=["results/bench_scaling_cuda.json", "results/bench_scaling_cpu.json"])
+    ap.add_argument("--inputs", nargs="+", default=["results/bench_scaling_cuda.json"])
     ap.add_argument("--out", default="results/bench_scaling.png")
     args = ap.parse_args()
 

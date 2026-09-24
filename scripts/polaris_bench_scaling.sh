@@ -19,6 +19,4 @@ mkdir -p results
 
 echo "[$(date -Iseconds)] cuda"
 python scripts/bench_scaling.py --device cuda --out results/bench_scaling_cuda.json
-echo "[$(date -Iseconds)] cpu"
-python scripts/bench_scaling.py --device cpu --out results/bench_scaling_cpu.json
 echo "[$(date -Iseconds)] done"
