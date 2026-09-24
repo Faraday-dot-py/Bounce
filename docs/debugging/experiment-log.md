@@ -2630,3 +2630,24 @@ replaced by a dim 2x2 haze); balls late in the rollout sit lower than truth
 30 with four distinct blobs, one matching at top right); no uniform drift
 direction; dim haze blobs (fading) seen in 4738 (steps 12, 30) and 4739
 (step 16). Grids: scratchpad `g_v31_{4738,4739,4740}.png`.
+
+### v33 / v34: 3000-batch continuation from v31, speed weight 0.3 vs 0.1 (2026-09-24)
+
+Both continue v31 for 3000 batches at 40-step unrolls (lr 3e-4, 50% replay,
+`--ball-split`, h44 data; ~9 min each). 48 seeds, position error at step
+1/2/3/5/10/15/20/50/100:
+
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v31 | 0.092 | 0.104 | 0.124 | 0.176 | 0.663 | 1.815 | 2.954 | 7.61 | 7.10 |
+| v34 (speed 0.1) | 0.093 | 0.106 | 0.127 | 0.187 | 0.689 | 1.865 | 2.982 | 7.22 | 8.13 |
+| v33 (speed 0.3) | 0.090 | 0.096 | 0.117 | 0.168 | 0.578 | 1.512 | 2.559 | 6.63 | 7.89 |
+
+Mean speed @10/@20/@50/@100 (truth 9.0 / 6.0 / 6.9 / 7.9): v31 8.5 / 5.0 /
+5.4 / 5.9; v34 8.4 / 5.0 / 5.1 / 5.8; v33 8.6 / 5.2 / 5.6 / 6.7.
+
+v33 improves on v31 at every step (step 10 -13%, step 15 -17%, step 20 -13%,
+step 50 -13%) while v34, trained the same length with the smaller weight, does
+not: the |v| magnitude loss weight matters (0.3 >> 0.1), not just extra
+training. v33 is the best model so far. v35 (speed weight 1.0) and v36
+(control at 0.3) continue from v33.
