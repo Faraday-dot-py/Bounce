@@ -5,6 +5,7 @@ from model.token_free import TokenFreeDynamics
 from model.token_net import TokenDynamics
 from model.token_track_query import TrackQueryDynamics
 from model.token_detect import find_token_positions, centroid_near, read_token_velocities
+from model.token_refine import refine_positions
 from model.token_gate import occluding_mask
 from model.token_rasterize import rasterize_tokens
 
@@ -58,13 +59,19 @@ class TokenModel(torch.nn.Module):
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
                  territory_masking=False, track_query=False, free_rollout=False,
                  mirror_sym=False, velocity_readout=False,
-                 wall_lookahead=False, wall_head=False, pair_impulse=False):
+                 wall_lookahead=False, wall_head=False, pair_impulse=False,
+                 position_refine=False):
         super().__init__()
         # Initial velocity read from the frame's VX/VY channels instead of
         # finite-differenced from two detections (error 2.1 -> 0.01 cells/s,
         # see docs/debugging/experiment-log.md). Off by default so existing
         # checkpoints keep their trained-with init.
         self.velocity_readout = velocity_readout
+        # Sub-cell init position refinement (model.token_refine); needs the
+        # VX/VY-channel velocities, so it requires velocity_readout.
+        if position_refine and not velocity_readout:
+            raise ValueError("position_refine requires velocity_readout")
+        self.position_refine = position_refine
         self.n = n
         self.radius = radius
         self.dt = dt
@@ -191,6 +198,10 @@ class TokenModel(torch.nn.Module):
                     torch.zeros((0, self.dynamics.hidden_dim), dtype=dtype, device=device))
         if self.velocity_readout:
             velocities = read_token_velocities(second_frame, pos1)
+            if self.position_refine:
+                pos1 = refine_positions(first_frame, second_frame, pos1, velocities,
+                                        radius=self.radius, dt=self.dt)
+                velocities = read_token_velocities(second_frame, pos1)
         elif pos0.shape[0] == 0:
             velocities = torch.zeros_like(pos1)
         else:

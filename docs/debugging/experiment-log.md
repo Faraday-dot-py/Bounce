@@ -2362,3 +2362,22 @@ speed 3.3 at step 20 and 100 vs truth 6.0/7.9; y drift small, mean vy
 -0.09 @20, -0.56 @50) so the wall/pair contact defects remain. Next levers:
 init position error (joint two-frame fit reaches 0.04 in the subagent probe),
 and v22-v24 (wall lookahead/head, pair impulse).
+
+### Init position refinement (2026-09-24)
+
+Subagent-built (scratchpad `refine_positions.py`, cleaned into
+`model/token_refine.py`): sub-cell fit of the frame-1 token positions to both
+frames' exact splats with no simulator constants (velocities from VX/VY,
+frame-0 position p1 - dt*(v0+v1)/2, per-ball shift hypotheses for
+bounces/collisions). Seeds 4738-4785, 40 with 4 tokens: init position error
+0.244 -> 0.066 ("joint", 12.5 ms/frame; 0.058 for "joint_vel" at 48 ms); the
+old gravity-hard-coded fit got 0.041. Residual error is a tail of balls
+covering only 1-2 cells (near-flat cost); it cannot recover the 8/48 seeds
+whose balls merge in `find_token_positions`. Opt-in
+`TokenModel(position_refine=True)` / `--position-refine` (requires
+velocity readout).
+
+v21 checkpoint with refinement, no retrain (`eval_v21_refine_noretrain.json`),
+position error at step 1/2/3/5/10/20: 0.091 / 0.136 / 0.193 / 0.324 / 1.104 /
+3.772 (v21: 0.270 / 0.292 / 0.329 / 0.436 / 1.133 / 3.951). The gain fades by
+step 10, so past that the dynamics (wall/pair contact) dominate.
