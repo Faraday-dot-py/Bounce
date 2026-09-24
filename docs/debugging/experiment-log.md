@@ -2338,3 +2338,27 @@ still collapses (mean speed 2.9 at step 20, 1.0 at step 50, 0.7 at step 100
 vs truth 6.0/6.9/7.9): the y-bias was a real defect but not the dominant
 source of short-horizon error. Wall and pair contact and init velocity are
 the next levers (v21-v24).
+
+### v21 curriculum + velocity readout (2026-09-24)
+
+Job 2880 (`polaris_train_token_v21.sh`: v19 curriculum + `--velocity-readout`),
+21m44s. 48 seeds, position error at step (`results/eval_v21_short.json`):
+
+| step | v18 | v18+readout (no retrain) | v21 |
+|---|---|---|---|
+| 1 | 0.431 | 0.361 | 0.270 |
+| 2 | 0.641 | 0.481 | 0.292 |
+| 3 | 0.833 | 0.595 | 0.329 |
+| 5 | 1.176 | 0.831 | 0.436 |
+| 10 | 2.038 | 1.653 | 1.133 |
+| 15 | 3.582 | 3.196 | 2.678 |
+| 20 | 5.073 | 4.613 | 3.951 |
+| 50 | 8.220 | 7.975 | 7.270 |
+
+Error at step 5 is -63% vs v18; step 1-2 (0.27-0.29) now sits at the init
+position error (0.24) floor. For scale, the twin-simulator eps=0.1
+perturbation gives 0.34 @5, 0.73 @10, 3.21 @20. Speed still decays (mean
+speed 3.3 at step 20 and 100 vs truth 6.0/7.9; y drift small, mean vy
+-0.09 @20, -0.56 @50) so the wall/pair contact defects remain. Next levers:
+init position error (joint two-frame fit reaches 0.04 in the subagent probe),
+and v22-v24 (wall lookahead/head, pair impulse).
