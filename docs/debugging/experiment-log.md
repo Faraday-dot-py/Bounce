@@ -2588,3 +2588,25 @@ Re-fuzz: worst velocity error on settled scenes 14 -> still up to ~14 for a
 few settled scenes but bounded, no explosions. v28 from scratch is deferred;
 instead v31 (continue v30 with --ball-split, 1500 batches) and v32 (same
 without, control) test whether splitting helps a converged model.
+
+### v31 / v32: another fine-tune round, with and without ball_split (2026-09-24)
+
+Both continue v30 for 1500 batches at 40-step unrolls (speed-weight 0.1,
+lr 3e-4, h44 data; ~4-5 min each): v31 with `--ball-split`, v32 without
+(control). 48 seeds, position error at step 1/2/3/5/10/15/20/50/100:
+
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v30 | 0.085 | 0.103 | 0.129 | 0.178 | 0.688 | 1.915 | 2.933 | 7.16 | 7.88 |
+| v32 (control) | 0.077 | 0.089 | 0.111 | 0.161 | 0.728 | 1.975 | 3.089 | 7.31 | 6.92 |
+| v31 (+ball-split) | 0.092 | 0.104 | 0.124 | 0.176 | 0.663 | 1.815 | 2.954 | 7.61 | 7.10 |
+
+Token-count mismatch seeds: v32 has 8 (scored only on the detected tokens, so
+its early-step numbers exclude the hard seeds' missing balls); v31 has none, so
+every ball in all 48 seeds is scored, yet steps 10-20 are equal or better than
+v32 (0.663 / 1.815 / 2.954 vs 0.728 / 1.975 / 3.089). Steps 1-5 are ~0.01-0.015
+higher for v31, consistent with the merged-ball seeds now contributing.
+Mean speed @20/@50/@100 (truth 6.0 / 6.9 / 7.9): v30 4.8 / 4.4 / 4.8; v32
+5.1 / 5.5 / 4.3; v31 5.0 / 5.4 / 5.9. Repeated fine-tune rounds keep
+improving energy retention (speed @50 4.4 -> 5.4-5.5) while position error
+holds. v31 (all token counts correct) is the best model so far.
