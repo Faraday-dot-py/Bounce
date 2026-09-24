@@ -11,7 +11,6 @@ Usage:
 """
 import argparse
 import time
-import tkinter as tk
 
 import numpy as np
 import torch
@@ -85,6 +84,8 @@ def speed_color(speed):
 
 
 def main():
+    import tkinter as tk
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", default="checkpoints/token_model_soup_b.pt")
     ap.add_argument("--n", type=int, default=100)
