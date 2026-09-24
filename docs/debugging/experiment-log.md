@@ -2391,3 +2391,14 @@ Slightly better at steps 3-5, worse from step 15 on. Mean speed 3.0 @20, 1.4
 @50, 1.0 @100 (v21: 3.3 / 3.2 / 3.4): energy still collapses, and faster than
 v21 late. Lookahead penetration features alone do not fix wall energy loss
 (the diagnosis expected the wall head to be needed for depth); v23 tests that.
+
+### v23 = v22 + wall-impulse head (2026-09-24)
+
+Job 2882, 25m36s. 48 seeds, position error at step 1/2/3/5/10/15/20/50/100
+(`eval_v23_short.json`): 0.267 / 0.290 / 0.318 / 0.374 / 1.050 / 2.640 / 4.043
+/ 8.05 / 9.35. Best so far at steps 3-10 (v21: 0.329 / 0.436 / 1.133 at
+3/5/10; v22: 0.320 / 0.406 / 1.130), @20 4.04 vs v21 3.95. Mean speed 4.25
+@20, 3.1 @50, 2.1 @100 (v21 3.3 / 3.2 / 3.4; truth 6.0 / 6.9 / 7.9): the wall
+head retains more energy through step 20-50 but it still decays by step
+100. Small gains only; pair contact (v24) and the remaining contact
+defects are the open items.
