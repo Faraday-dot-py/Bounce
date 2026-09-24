@@ -2183,3 +2183,26 @@ v18 matches truth through step ~5, then loses kinetic energy: speed ~2.5-2.9
 from step 20 on vs truth 6-8 (mean |vx| 1.4 vs 5.0 at 100). The
 long-horizon blob "bunching" in the frame review is consistent with this
 energy loss (a damped model), separate from the chaos limit.
+
+### Correction: leftward momentum is a model bias in y (2026-09-24)
+
+The section above attributing the drift to gravity was wrong for the
+reported symptom: gravity is along x (`bounce.py:137`), and the truth has
+no y force, but the v18 model develops a systematic -y (leftward) velocity.
+Probes: `scripts/probe_y_bias.py`, `probe_y_bias_source.py`,
+`probe_y_bias_context.py`, `probe_y_mirror.py`, `probe_head_bias.py`.
+
+- Mean token vy, 44 seeds (model / truth): step 10 -0.00 / +0.24, step 15
+  -0.54 / +0.29, step 20 -0.99 / +0.31, step 30 -2.37 / +0.15; fraction of
+  seeds with mean vy < 0 at step 30: 1.00.
+- The simulator is exactly symmetric under y -> 19-y, vy -> -vy. Teacher-
+  forced, model prediction on mirrored vs original states violates this by a
+  mean vy bias of -0.125 per step (|.| 0.345), uniform across context: free
+  -0.114, neighbor<3 -0.124, y-wall -0.145.
+- `dynamics.delta_head.bias` = [dpos_x -0.050, dpos_y +0.004, dvel_x -0.145,
+  dvel_y -0.099]: the -0.099 dvel_y bias is a constant y-acceleration in a
+  system with none, matching the -0.125 mirror violation.
+- Wall response is not mirror-symmetric (teacher-forced d_vy vs truth: near
+  y<3 +1.33, near y>16 -1.89), bounces are weak (hand-built test: vy -3 in,
+  ~0.8 out), and pair collisions do not conserve momentum (2-ball head-on:
+  total vy wanders +-0.4, truth exactly 0).
