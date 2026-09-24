@@ -46,9 +46,12 @@ def rollout(model, frame0, frame1, num_steps):
         observed = g1
         prev_obs_pos = positions
         for _ in range(num_steps - 1):
-            positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
-                positions, velocities, hidden, observed, prev_obs_pos
-            )
+            if model.free_rollout:
+                positions, velocities, hidden, pred_grid = model.step_free(positions, velocities, hidden)
+            else:
+                positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                    positions, velocities, hidden, observed, prev_obs_pos
+                )
             frames.append(pred_grid.numpy().transpose(1, 2, 0))
             observed = pred_grid
     return frames
@@ -65,6 +68,7 @@ if __name__ == "__main__":
     ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--track-query", action="store_true")
+    ap.add_argument("--free-rollout", action="store_true")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--out", type=str, default="/tmp/token_artifact_grid.png")
@@ -75,7 +79,8 @@ if __name__ == "__main__":
 
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
                         neighbor_radius=args.neighbor_radius, velocity_weight=args.velocity_weight,
-                        territory_masking=args.territory_masking, track_query=args.track_query)
+                        territory_masking=args.territory_masking, track_query=args.track_query,
+                        free_rollout=args.free_rollout)
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], num_steps)
