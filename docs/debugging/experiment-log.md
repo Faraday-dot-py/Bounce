@@ -2570,3 +2570,21 @@ Mean speed @20/@50 (truth 6.0 / 6.9): v25 4.7 / 3.6; v29 4.8 / 4.6; v30 4.8 /
 (v26), which hurt. The |v| magnitude loss gives a further ~10% at steps 10-20
 over plain fine-tuning. Speed retention improves at step 50 but the deficit
 (4.4 vs 6.9) remains.
+
+### v28 second attempt: ball_split loss explosion (2026-09-24)
+
+Job 2893 (v28 rerun after the device fix) ran but the stage-1 chunk losses were
+70048, 1.14, 0.57, 11.98, then 2.2e8 at stage 2: some scenes produced wild init
+tokens. Cause: `_velocities` (least squares on VX/VY given fitted positions)
+is ill-conditioned when balls are stacked or nearly coincident (the dataset
+includes clustered and settled scenarios), giving velocity errors of 20+
+cells/s (fuzz on 150 dataset-like scenes: 8 bad, verr up to 30; the old
+detector + readout tops out at ~8 cells/s error on settled scenes where true
+max |v| is ~12). Job cancelled, fixed in `model/token_split.py`
+(`_safe_velocities`: a token whose solved velocity is non-finite, > 20 cells/s
+or > 4 from the windowed VX/VY readout falls back to the readout; position
+sanity: non-finite or outside the grid falls back to the plain detections).
+Re-fuzz: worst velocity error on settled scenes 14 -> still up to ~14 for a
+few settled scenes but bounded, no explosions. v28 from scratch is deferred;
+instead v31 (continue v30 with --ball-split, 1500 batches) and v32 (same
+without, control) test whether splitting helps a converged model.
