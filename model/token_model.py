@@ -56,7 +56,8 @@ class TokenModel(torch.nn.Module):
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
-                 territory_masking=False, track_query=False, free_rollout=False):
+                 territory_masking=False, track_query=False, free_rollout=False,
+                 mirror_sym=False):
         super().__init__()
         self.n = n
         self.radius = radius
@@ -135,8 +136,11 @@ class TokenModel(torch.nn.Module):
                 "free_rollout is incompatible with track_query/territory_masking/velocity_weight "
                 "-- it never reads an observed frame"
             )
+        if mirror_sym and not free_rollout:
+            raise ValueError("mirror_sym requires free_rollout")
         if free_rollout:
-            self.dynamics = TokenFreeDynamics(n=n, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+            self.dynamics = TokenFreeDynamics(n=n, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
+                                              mirror_sym=mirror_sym)
         elif track_query:
             self.dynamics = TrackQueryDynamics(
                 hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,

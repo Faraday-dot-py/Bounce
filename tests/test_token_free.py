@@ -60,3 +60,28 @@ def test_zero_and_one_token_keep_grad_fn():
         assert dp.shape == (count, 2)
         assert (dp.sum() + dv.sum() + nh.sum()).requires_grad
         assert torch.isfinite(nh).all()
+
+
+def test_mirror_sym_is_y_reflection_equivariant():
+    torch.manual_seed(4738)
+    n = 20
+    dyn = TokenFreeDynamics(n=n, mirror_sym=True)
+    torch.nn.init.normal_(dyn.delta_head.weight, std=0.1)
+    torch.nn.init.normal_(dyn.delta_head.bias, std=0.1)
+    pos = torch.tensor([[5.0, 2.0], [6.0, 3.0], [12.0, 17.0]])
+    vel = torch.randn(3, 2)
+    hidden = torch.randn(3, dyn.hidden_dim)
+    mirrored_pos = torch.stack([pos[:, 0], (n - 1) - pos[:, 1]], dim=1)
+    mirrored_vel = vel * torch.tensor([1.0, -1.0])
+    swapped = torch.cat([hidden[:, dyn.core_dim:], hidden[:, :dyn.core_dim]], dim=-1)
+    dp, dv, nh = dyn(pos, vel, hidden)
+    dp_m, dv_m, nh_m = dyn(mirrored_pos, mirrored_vel, swapped)
+    flip = torch.tensor([1.0, -1.0])
+    assert torch.allclose(dp_m, dp * flip, atol=1e-6)
+    assert torch.allclose(dv_m, dv * flip, atol=1e-6)
+    assert torch.allclose(nh_m, torch.cat([nh[:, dyn.core_dim:], nh[:, :dyn.core_dim]], dim=-1), atol=1e-6)
+
+
+def test_mirror_sym_hidden_is_twice_core_and_default_unchanged():
+    assert TokenFreeDynamics(n=20, hidden_dim=8, mirror_sym=True).hidden_dim == 16
+    assert TokenFreeDynamics(n=20, hidden_dim=8).hidden_dim == 8
