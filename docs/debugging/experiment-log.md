@@ -12,6 +12,8 @@ stats have repeatedly looked fine while the rollout was actually broken
 (see 2026-09-21 entries below). Always check actual per-frame, auto-scaled
 visual output.
 
+Paper-process notes (method for write-up): `docs/paper/analysis-process.md`.
+
 ---
 
 ## 2026-09-21 — checkerboard artifact root-caused and (partially) fixed
