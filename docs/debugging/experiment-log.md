@@ -2792,3 +2792,43 @@ Implemented as `--contact-weight` (`model.token_losses.contact_mask`: a token
 is up-weighted when its true nearest ball is within 1.6 at the previous or
 target step). v38 = fine-tune soup B for 3000 batches with `--contact-weight
 3.0 --speed-weight 0.3`; v39 = control (same, no contact weight).
+
+### v38 (contact-weighted) vs v39 (control), fine-tuning soup B (2026-09-24)
+
+3000 batches at 40-step unrolls from soup B, speed-weight 0.3; v38 adds
+`--contact-weight 3.0`, v39 does not (~9 min each). Position error at step
+1/2/3/5/10/15/20/50/100, three seed sets (`results/{v38,v39,soupc}_<base>.json`):
+
+Seeds 4738+:
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| soup B | 0.090 | 0.099 | 0.121 | 0.172 | 0.561 | 1.544 | 2.595 | 6.85 | 8.09 |
+| v38 | 0.089 | 0.098 | 0.119 | 0.174 | 0.621 | 1.688 | 2.911 | 7.07 | 7.50 |
+| v39 | 0.097 | 0.117 | 0.150 | 0.212 | 0.675 | 1.928 | 3.093 | 7.22 | 8.02 |
+| soup C | 0.091 | 0.103 | 0.127 | 0.179 | 0.589 | 1.721 | 2.810 | 6.73 | 8.02 |
+
+Seeds 9000+:
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| soup B | 0.094 | 0.106 | 0.122 | 0.161 | 0.432 | 1.448 | 2.608 | 7.35 | 7.63 |
+| v38 | 0.094 | 0.103 | 0.115 | 0.157 | 0.480 | 1.534 | 2.800 | 7.34 | 7.51 |
+| v39 | 0.101 | 0.122 | 0.146 | 0.205 | 0.554 | 1.772 | 3.291 | 6.84 | 7.72 |
+| soup C | 0.096 | 0.109 | 0.126 | 0.168 | 0.476 | 1.548 | 2.832 | 7.06 | 7.40 |
+
+Seeds 12000+:
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| soup B | 0.070 | 0.079 | 0.100 | 0.140 | 0.496 | 1.454 | 2.396 | 6.45 | 7.54 |
+| v38 | 0.070 | 0.081 | 0.101 | 0.143 | 0.575 | 1.621 | 2.666 | 7.12 | 7.60 |
+| v39 | 0.077 | 0.097 | 0.127 | 0.185 | 0.621 | 1.783 | 2.850 | 6.94 | 7.98 |
+| soup C | 0.072 | 0.085 | 0.107 | 0.148 | 0.533 | 1.571 | 2.466 | 7.13 | 7.69 |
+
+Soup C = mean(soup B, v38, v39). Read: contact weighting beats its
+same-length control on all three seed sets (v38 vs v39: step 5 -18 / -23 /
+-23%; step 10 -8 / -13 / -7%; step 20 -6 / -15 / -6%), consistent with the
+diagnosis that pair contact carries most of the error. But further
+fine-tuning from the soup drifts below soup B itself (v39, the control, is
+worse than soup B at steps 5-20 on all three sets), so neither v38 nor soup C
+beats soup B. The effect has to be judged within a lineage: v40 / v41 / v42
+apply `--contact-weight 3.0` to v30 / v31 / v33 so that a contact lineage soup
+(v38, v40, v41, v42) can be compared with soup B.
