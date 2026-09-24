@@ -24,10 +24,10 @@ from model.token_model import TokenModel
 
 
 def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0,
-                territory_masking=False, track_query=False):
+                territory_masking=False, track_query=False, free_rollout=False):
     model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
                         velocity_weight=velocity_weight, territory_masking=territory_masking,
-                        track_query=track_query)
+                        track_query=track_query, free_rollout=free_rollout)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -55,9 +55,12 @@ def rollout(model, frame0, frame1, num_steps):
         observed = g1
         prev_obs_pos = positions
         for _ in range(num_steps - 1):
-            positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
-                positions, velocities, hidden, observed, prev_obs_pos
-            )
+            if model.free_rollout:
+                positions, velocities, hidden, pred_grid = model.step_free(positions, velocities, hidden)
+            else:
+                positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                    positions, velocities, hidden, observed, prev_obs_pos
+                )
             frames.append(pred_grid.numpy().transpose(1, 2, 0))
             observed = pred_grid
     return frames
@@ -75,12 +78,14 @@ if __name__ == "__main__":
     ap.add_argument("--velocity-weight", type=float, default=0.0)
     ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--track-query", action="store_true")
+    ap.add_argument("--free-rollout", action="store_true")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight,
-                        territory_masking=args.territory_masking, track_query=args.track_query)
+                        territory_masking=args.territory_masking, track_query=args.track_query,
+                        free_rollout=args.free_rollout)
     gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, args.num_steps, gravity=args.gravity)
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], args.num_steps)
 

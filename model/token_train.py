@@ -16,11 +16,19 @@ def sampling_probability(epoch, ramp_epochs):
     return min(1.0, max(0.0, epoch / ramp_epochs))
 
 
+def horizon_for_epoch(epoch, ramp_epochs, start, full):
+    if ramp_epochs <= 0:
+        return full
+    frac = min(1.0, epoch / ramp_epochs)
+    return int(round(start + frac * (full - start)))
+
+
 def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         bg_weight=0.05, peak_weight=0.1, mass_weight=0.0, mass_tile=16,
                         boundary_weight=0.1, boundary_margin=0.0,
                         state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1,
-                        collapse_weight=0.0, collapse_floor=0.3, collapse_margin=1.0):
+                        collapse_weight=0.0, collapse_floor=0.3, collapse_margin=1.0,
+                        free=False, max_steps=None):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -69,12 +77,18 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
     prev_obs_pos = positions
     total_loss = grid_seq.new_zeros(())
     num_steps = max(horizon - 1, 1)
-    grid_weight_effective = grid_weight * sampling_p
+    if max_steps is not None:
+        num_steps = min(num_steps, max_steps)
+    grid_weight_effective = grid_weight * (1.0 if free else sampling_p)
     for step in range(num_steps):
-        source_grid = observed_frame
-        positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
-            positions, velocities, hidden, observed_frame, prev_obs_pos
-        )
+        if free:
+            source_grid = grid_seq[step + 1]
+            positions, velocities, hidden, pred_grid = model.step_free(positions, velocities, hidden)
+        else:
+            source_grid = observed_frame
+            positions, velocities, hidden, pred_grid, prev_obs_pos = model.step(
+                positions, velocities, hidden, observed_frame, prev_obs_pos
+            )
         target_grid = grid_seq[step + 2]
         target_state = state_seq[step + 2]
         total_loss = total_loss + state_weight * token_state_loss(
@@ -93,8 +107,9 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                 pred_grid[0], positions, model.radius, margin=collapse_margin, floor=collapse_floor,
                 all_positions=positions, self_idx_offset=0,
             )
-        self_feed = random.random() < sampling_p
-        observed_frame = pred_grid.detach() if self_feed else target_grid
+        if not free:
+            self_feed = random.random() < sampling_p
+            observed_frame = pred_grid.detach() if self_feed else target_grid
     return total_loss / num_steps
 
 
@@ -116,12 +131,14 @@ def train(args):
                         neighbor_radius=args.neighbor_radius,
                         velocity_weight=args.velocity_weight,
                         territory_masking=args.territory_masking,
-                        track_query=args.track_query).to(device)
+                        track_query=args.track_query,
+                        free_rollout=args.free_rollout).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
     for epoch in range(args.epochs):
         sampling_p = sampling_probability(epoch, args.ramp_epochs)
+        epoch_horizon = horizon_for_epoch(epoch, args.horizon_ramp, args.horizon_start, args.horizon)
         epoch_loss = 0.0
         running_loss = 0.0
         for batch_idx, (grid_seq, state_seq) in enumerate(loader):
@@ -132,6 +149,8 @@ def train(args):
                 state_weight=args.state_weight, grid_weight=args.grid_weight,
                 state_vel_weight=args.state_vel_weight,
                 collapse_weight=args.collapse_weight, collapse_floor=args.collapse_floor,
+                free=args.free_rollout,
+                max_steps=epoch_horizon - 1 if args.free_rollout else None,
             )
             opt.zero_grad()
             loss.backward()
@@ -145,6 +164,8 @@ def train(args):
                 running_loss = 0.0
         print(f"epoch {epoch} sampling_p={sampling_p:.2f} loss={epoch_loss / len(dataset):.4f}", flush=True)
         torch.save(model.state_dict(), args.checkpoint)
+        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": epoch},
+                   args.checkpoint + ".full")
 
 
 def main():
@@ -180,6 +201,13 @@ def main():
     # with learned self-/cross-attention. Off by default so existing
     # recipes/checkpoints are byte-for-byte unaffected.
     ap.add_argument("--track-query", action="store_true")
+    ap.add_argument("--free-rollout", action="store_true",
+                     help="observation-free rollout (TokenModel.step_free); see "
+                          "docs/superpowers/specs/2026-09-23-token-free-rollout-design.md")
+    ap.add_argument("--horizon-ramp", type=int, default=0,
+                     help="epochs over which the free-rollout unroll grows from --horizon-start "
+                          "to --horizon (0 = always full)")
+    ap.add_argument("--horizon-start", type=int, default=4)
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--boundary-weight", type=float, default=0.1)

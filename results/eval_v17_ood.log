@@ -1,0 +1,25 @@
+{
+  "checkpoint": "checkpoints/token_model_h12_v17.pt",
+  "mode": "v17",
+  "n": 50,
+  "num_balls": 100,
+  "num_seeds": 8,
+  "num_steps": 300,
+  "mean_position_error": {
+    "20": 14.460683822631836,
+    "100": 29.977630615234375,
+    "300": 35.93768310546875
+  },
+  "identity_swaps": 697,
+  "token_count_mismatch_seeds": [
+    4738,
+    4739,
+    4740,
+    4741,
+    4742,
+    4743,
+    4744,
+    4745
+  ],
+  "faded_token_fraction": 0.08108108108108109
+}

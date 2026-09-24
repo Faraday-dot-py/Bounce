@@ -1,6 +1,7 @@
 import torch
 from scipy.optimize import linear_sum_assignment
 
+from model.token_free import TokenFreeDynamics
 from model.token_net import TokenDynamics
 from model.token_track_query import TrackQueryDynamics
 from model.token_detect import find_token_positions, centroid_near
@@ -55,7 +56,7 @@ class TokenModel(torch.nn.Module):
     def __init__(self, n, radius, dt, hidden_dim=32, neighbor_radius=3.0,
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
-                 territory_masking=False, track_query=False):
+                 territory_masking=False, track_query=False, free_rollout=False):
         super().__init__()
         self.n = n
         self.radius = radius
@@ -128,7 +129,15 @@ class TokenModel(torch.nn.Module):
                 "(v9-path-only options) -- track_query has its own observation-"
                 "correction mechanism (TrackQueryDynamics's cross-attention stage)"
             )
-        if track_query:
+        self.free_rollout = free_rollout
+        if free_rollout and (track_query or territory_masking or velocity_weight > 0.0):
+            raise ValueError(
+                "free_rollout is incompatible with track_query/territory_masking/velocity_weight "
+                "-- it never reads an observed frame"
+            )
+        if free_rollout:
+            self.dynamics = TokenFreeDynamics(n=n, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius)
+        elif track_query:
             self.dynamics = TrackQueryDynamics(
                 hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
                 radius=radius, margin=detect_margin, max_expansions=max_expansions,
@@ -260,3 +269,16 @@ class TokenModel(torch.nn.Module):
 
         next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
         return final_pos, final_vel, new_hidden, next_grid, obs_pos
+
+    def step_free(self, positions, velocities, hidden):
+        """Observation-free step: no frame is read, so a token can never
+        lose its ball to a faded self-rendered observation -- see
+        docs/superpowers/specs/2026-09-23-token-free-rollout-design.md.
+        The rasterized grid is output only."""
+        if not self.free_rollout:
+            raise RuntimeError("step_free requires TokenModel(free_rollout=True)")
+        delta_pos, delta_vel, new_hidden = self.dynamics(positions, velocities, hidden)
+        final_pos = positions + velocities * self.dt + delta_pos
+        final_vel = velocities + delta_vel
+        next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
+        return final_pos, final_vel, new_hidden, next_grid

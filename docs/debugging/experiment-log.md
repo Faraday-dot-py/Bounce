@@ -2033,3 +2033,93 @@ sufficient evidence the architecture direction is sound and stop here.
 Checkpoints and videos: `checkpoints/token_model_h12_v17.pt`,
 `videos/token_model_v17_diagnostic_grid.png`,
 `videos/token_model_v17_rollout.mp4`.
+
+## v18: observation-free rollout (free_rollout) -- 2026-09-23
+
+Spec `docs/superpowers/specs/2026-09-23-token-free-rollout-design.md`, plan
+`docs/superpowers/plans/2026-09-23-token-free-rollout.md`. After
+`init_tokens` on frames 0/1, tokens evolve in state space only
+(`TokenModel.step_free`, `TokenFreeDynamics` = TokenDynamics + wall-proximity
+features); the rendered frame is never read back, so dropout cannot occur.
+Job 2876: 10 epochs, horizon ramp 4 -> 16 over 5 epochs, state loss +
+boundary + 0.1 grid loss, dataset h24 (job 2874). 10 epochs not 50: per-epoch
+cost scales with unroll length, 50 epochs at 24 steps did not fit the 4h
+limit (job 2875 cancelled). Loss (per-step mean) rose with horizon
+(2.72 -> 9.87 at 16 steps) then plateaued 9.79 -> 9.64 over epochs 6-9.
+
+Scored with `scripts/eval_free_rollout.py`, seed 4738, 300 steps, mean
+position error vs ground truth (grid cells; token matched to ball once at
+frame 1). The dropout metric is retired for v18 (tokens cannot vanish);
+"faded" is the fraction of tokens whose own rendered PROB peak < 0.05 at the
+last step.
+
+20x20, 4 balls, 48 seeds:
+
+| model | err @20 | @100 | @300 | swaps | faded |
+|---|---|---|---|---|---|
+| v9 (observation loop) | 5.83 | 9.54 | 15.12 | 141 | 42.8% |
+| v9, observation off | 5.64 | 10.32 | 19.55 | 144 | 88.8% |
+| v17 track-query | 5.10 | 9.23 | 10.19 | 141 | 0.5% |
+| v18 free rollout | 5.07 | 7.47 | 8.63 | 139 | 0.0% |
+
+50x50, 100 balls, 8 seeds (OOD):
+
+| model | err @20 | @100 | @300 | faded |
+|---|---|---|---|---|
+| v9 | 21.21 | 24.08 | 41.28 | 79.5% |
+| v17 | 14.46 | 29.98 | 35.94 | 8.1% |
+| v18 | 16.09 | 25.71 | 26.16 | 0.0% |
+
+Read: v18 has the lowest position error at 100 and 300 steps in-distribution
+(8.63 vs v9's 15.12 at 300, -43%) and at 300 steps OOD; v17 is best at 20
+steps OOD and v9 marginally best at 100 steps OOD (24.08 vs 25.71). Caveats:
+(1) identity swaps are ~equal for all models and saturated OOD (~695 of ~700
+tokens), so the metric does not discriminate at these horizons; (2) 0%
+faded for v18 is true by construction, not evidence of accuracy; (3) mean
+error ~5 cells at step 20 means every model, v18 included, has lost the
+individual balls by step ~12-20 -- v18's edge is that its blobs keep moving
+and stay in the region where the true balls gather, not that it tracks them;
+(4) no trivial baseline (e.g. mean-position) computed, so the absolute error
+scale is uninterpreted; (5) 4 of 48 seeds have a token count != 4 in all
+models (init detection merges two balls), identical seed set.
+Unbiased subagent frame review (grid steps 0-60): both models match through
+step 3; v18 tracks roughly to step 12, then blobs bunch into a 2-3 blob group
+near where the true balls settle, never vanish or smear; v9's blobs thin to
+single pixels and freeze, one stays parked in empty space through step 60.
+Neither tracks identity after step ~12-20.
+
+Artifacts: `checkpoints/token_model_h24_v18.pt`, `results/eval_*.json`,
+`videos/token_model_v18_diagnostic_grid.png`,
+`videos/token_model_v9_long_diagnostic_grid.png`,
+`videos/token_model_v18_rollout.mp4` (mp4 gitignored).
+
+### Trivial baselines for the v18 comparison (2026-09-24)
+
+`scripts/eval_trivial_baselines.py`, same seeds/scenarios. stay = frozen at
+frame-1 ball positions; centroid = oracle true ball centroid each step;
+velocity = constant frame-1->2 velocity, clamped.
+
+20x20, 4 balls, 48 seeds (err @20 / @100 / @300):
+
+| baseline | @20 | @100 | @300 |
+|---|---|---|---|
+| stay | 5.83 | 9.55 | 10.20 |
+| centroid (oracle) | 6.33 | 5.47 | 5.39 |
+| velocity | 7.30 | 11.58 | 12.57 |
+
+50x50, 100 balls, 8 seeds:
+
+| baseline | @20 | @100 | @300 |
+|---|---|---|---|
+| stay | 22.49 | 25.78 | 25.34 |
+| centroid (oracle) | 13.18 | 16.74 | 18.09 |
+| velocity | 19.64 | 28.11 | 32.40 |
+
+Read: the v18 "win" is much smaller than the model table suggested. In
+distribution v18 @300 (8.63) beats stay (10.20) by 15% and v9 (15.12) by
+43%, but the oracle centroid (5.39) beats every model. OOD v18 @300 (26.16)
+is no better than stay (25.34). v9 @20 (5.83) equals stay @20 (5.83) exactly
+-- at step 20 no model beats standing still in distribution (v18 5.07, v17
+5.10 are ~13% better). v9's late error (15.12/41.28) is worse than stay, so
+its edge over the old baseline is really that v9 diverges. Free rollout
+fixes divergence/fading; it does not add tracking skill.
