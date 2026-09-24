@@ -2544,3 +2544,29 @@ later stages trade short-step accuracy for long-horizon loss under chaotic
 gradients; longer unrolls are not the fix for this recipe. v27
 (speed-magnitude loss) was cancelled before starting; it can be retried on the
 24-step recipe.
+
+### v28 crash and v29/v30 fine-tunes (2026-09-24)
+
+v28 (v25 + `--ball-split`, job 2890) crashed 24 s into training: `detect_balls`
+returned CPU tensors while training runs on the GPU
+(`torch.cdist ... cuda:0 vs cpu` in `match_tokens_to_state`). Fixed in
+`init_tokens` (tensors moved to the frame's device, commit 931657d) and
+resubmitted as job 2893; ~30 min of queue time lost.
+
+Fine-tunes of v25 at 40-step unrolls (`--init-checkpoint`,
+`--curriculum-min-steps 40`, 1500 batches, lr 3e-4, 50% replay of shorter
+unrolls, h44 dataset), ~4 min each on the GPU. 48 seeds, position error at
+step 1/2/3/5/10/15/20/50/100:
+
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v25 | 0.094 | 0.119 | 0.155 | 0.228 | 0.816 | 2.218 | 3.357 | 6.89 | 7.77 |
+| v29 (fine-tune) | 0.081 | 0.099 | 0.127 | 0.187 | 0.738 | 2.041 | 3.222 | 7.29 | 8.00 |
+| v30 (+ speed loss 0.1) | 0.085 | 0.103 | 0.129 | 0.178 | 0.688 | 1.915 | 2.933 | 7.16 | 7.88 |
+
+Mean speed @20/@50 (truth 6.0 / 6.9): v25 4.7 / 3.6; v29 4.8 / 4.6; v30 4.8 /
+4.4. A short fine-tune at long unrolls improves every step from 1 to 20
+(step 10 -16% for v30), unlike the from-scratch long-unroll curriculum
+(v26), which hurt. The |v| magnitude loss gives a further ~10% at steps 10-20
+over plain fine-tuning. Speed retention improves at step 50 but the deficit
+(4.4 vs 6.9) remains.
