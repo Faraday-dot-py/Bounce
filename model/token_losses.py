@@ -42,7 +42,7 @@ def token_grid_loss(pred_grid, target_grid, source_grid, weights, bg_weight=0.05
     )
 
 
-def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0.1):
+def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0.1, speed_weight=0.0):
     """Direct per-token MSE against the dataset's ground-truth ball state
     (model.token_dataset's state_seq entries), using the correspondence
     `match_idx` from model.token_match.match_tokens_to_state. Unlike
@@ -54,14 +54,24 @@ def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0
 
     vel_weight down-weights the velocity term since VX/VY and X/Y are on
     different natural scales (velocities are the same order of magnitude
-    as one grid cell per dt, positions span the whole grid)."""
+    as one grid cell per dt, positions span the whole grid).
+
+    speed_weight adds a direction-agnostic |v| term: once phase is chaotic
+    the MSE is minimized by shrinking velocity toward the conditional mean,
+    which bleeds kinetic energy out of long rollouts (see docs/debugging/
+    experiment-log.md, energy audit); penalizing |v_pred| vs |v_true|
+    directly does not reward that shrinkage. Default 0 (off)."""
     if final_pos.shape[0] == 0:
         return final_pos.new_zeros(())
     target_pos = torch.stack([target_state["x"], target_state["y"]], dim=1)[match_idx]
     target_vel = torch.stack([target_state["vx"], target_state["vy"]], dim=1)[match_idx]
     pos_loss = ((final_pos - target_pos) ** 2).mean()
     vel_loss = ((final_vel - target_vel) ** 2).mean()
-    return pos_loss + vel_weight * vel_loss
+    loss = pos_loss + vel_weight * vel_loss
+    if speed_weight > 0.0:
+        speed_err = torch.sqrt((final_vel ** 2).sum(dim=-1) + 1e-8) - torch.sqrt((target_vel ** 2).sum(dim=-1) + 1e-8)
+        loss = loss + speed_weight * (speed_err ** 2).mean()
+    return loss
 
 
 def window_collapse_loss(prob, positions, radius, margin=1.0, floor=0.3,

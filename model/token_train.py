@@ -49,7 +49,7 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         boundary_weight=0.1, boundary_margin=0.0,
                         state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1,
                         collapse_weight=0.0, collapse_floor=0.3, collapse_margin=1.0,
-                        free=False, max_steps=None):
+                        free=False, max_steps=None, speed_weight=0.0):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -113,7 +113,8 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
         target_grid = grid_seq[step + 2]
         target_state = state_seq[step + 2]
         total_loss = total_loss + state_weight * token_state_loss(
-            positions, velocities, target_state, match_idx, vel_weight=state_vel_weight
+            positions, velocities, target_state, match_idx, vel_weight=state_vel_weight,
+            speed_weight=speed_weight,
         )
         total_loss = total_loss + grid_weight_effective * token_grid_loss(
             pred_grid, target_grid, source_grid, weights,
@@ -224,7 +225,7 @@ def train_stepwise(args, model, opt, loader, weights):
                     boundary_weight=args.boundary_weight, boundary_margin=args.boundary_margin,
                     state_weight=args.state_weight, grid_weight=args.grid_weight,
                     state_vel_weight=args.state_vel_weight,
-                    free=True, max_steps=steps,
+                    free=True, max_steps=steps, speed_weight=args.speed_weight,
                 )
                 opt.zero_grad()
                 loss.backward()
@@ -318,6 +319,8 @@ def main():
     # that's supposed to teach the network to track velocity barely
     # penalizes getting it wrong.
     ap.add_argument("--state-vel-weight", type=float, default=0.1)
+    ap.add_argument("--speed-weight", type=float, default=0.0,
+                     help="weight of the |v| magnitude term in token_state_loss (stepwise curriculum only)")
     # Weight token_grid_loss ramps to (from 0) over the same sampling_p
     # schedule as self-feed -- see token_rollout_loss's docstring.
     ap.add_argument("--grid-weight", type=float, default=0.1)

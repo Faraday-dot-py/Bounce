@@ -275,3 +275,17 @@ def test_window_collapse_loss_territory_default_unaffected():
     with_none = window_collapse_loss(prob, positions, radius=0.75, floor=0.3,
                                       all_positions=None)
     assert torch.allclose(baseline, with_none)
+
+
+def test_token_state_loss_speed_weight_penalizes_shrunk_velocity_not_direction_only():
+    target = {"x": torch.tensor([1.0]), "y": torch.tensor([1.0]), "vx": torch.tensor([3.0]), "vy": torch.tensor([4.0])}
+    match_idx = torch.tensor([0])
+    pos = torch.tensor([[1.0, 1.0]])
+    shrunk = torch.tensor([[1.5, 2.0]])
+    rotated = torch.tensor([[4.0, -3.0]])
+    base_s = token_state_loss(pos, shrunk, target, match_idx, vel_weight=0.0)
+    with_s = token_state_loss(pos, shrunk, target, match_idx, vel_weight=0.0, speed_weight=1.0)
+    assert with_s > base_s
+    assert torch.isclose(with_s - base_s, torch.tensor((2.5 - 5.0) ** 2), atol=1e-3)
+    rot = token_state_loss(pos, rotated, target, match_idx, vel_weight=0.0, speed_weight=1.0)
+    assert torch.isclose(rot, torch.tensor(0.0), atol=1e-3)
