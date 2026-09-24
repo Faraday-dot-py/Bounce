@@ -2832,3 +2832,29 @@ worse than soup B at steps 5-20 on all three sets), so neither v38 nor soup C
 beats soup B. The effect has to be judged within a lineage: v40 / v41 / v42
 apply `--contact-weight 3.0` to v30 / v31 / v33 so that a contact lineage soup
 (v38, v40, v41, v42) can be compared with soup B.
+
+### Contact-weighted lineage soups D and E (2026-09-24)
+
+v40 / v41 / v42 = `--contact-weight 3.0 --speed-weight 0.3` fine-tunes (3000
+batches, 40-step unrolls) of v30 / v31 / v33. Soup D = mean(v38, v40, v41,
+v42) (contact lineage); soup E = mean of all ten fine-tunes (v30, v31, v33,
+v34, v36, v37, v38, v40, v41, v42). Position error at step 1/2/3/5/10/15/20
+(`results/soup{d,e}_<base>.json`):
+
+| seeds | model | 1 | 2 | 3 | 5 | 10 | 15 | 20 |
+|---|---|---|---|---|---|---|---|---|
+| 4738+ | soup B | 0.090 | 0.099 | 0.121 | 0.172 | 0.561 | 1.544 | 2.595 |
+| 4738+ | soup D | 0.093 | 0.110 | 0.136 | 0.198 | 0.599 | 1.714 | 2.749 |
+| 4738+ | soup E | 0.091 | 0.103 | 0.126 | 0.181 | 0.580 | 1.644 | 2.637 |
+| 9000+ | soup B | 0.094 | 0.106 | 0.122 | 0.161 | 0.432 | 1.448 | 2.608 |
+| 9000+ | soup D | 0.098 | 0.115 | 0.135 | 0.184 | 0.463 | 1.453 | 2.811 |
+| 9000+ | soup E | 0.095 | 0.109 | 0.126 | 0.169 | 0.442 | 1.455 | 2.643 |
+| 12000+ | soup B | 0.070 | 0.079 | 0.100 | 0.140 | 0.496 | 1.454 | 2.396 |
+| 12000+ | soup D | 0.074 | 0.092 | 0.117 | 0.164 | 0.534 | 1.535 | 2.592 |
+| 12000+ | soup E | 0.071 | 0.083 | 0.105 | 0.147 | 0.508 | 1.479 | 2.445 |
+
+The contact-weighted lineage soup is worse than soup B on all three seed sets
+(step 5: +15 / +14 / +17%; step 20: +6 / +8 / +8%), and the ten-checkpoint
+soup E is marginally worse than soup B. Contact weighting beat its own
+control (v38 vs v39) but does not improve on the plain lineage soup, so soup B
+remains the headline model.
