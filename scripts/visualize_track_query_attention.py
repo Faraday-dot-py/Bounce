@@ -1,15 +1,23 @@
 """Dumps per-step, per-token self-/cross-attention weights for a
 track-query TokenModel rollout, aligned against diagnose_token_dropout.py's
-per-step trace output (window total, occlusion state would be reported
-by that script; occlusion/window-total are gate-and-mask concepts that
-don't apply to this architecture, so this script reports the two things
-that DO apply here: which neighbors a token's self-attention weighted
-most heavily, and how concentrated its cross-attention was over its own
-local window). Built alongside the architecture (see
+per-step trace output (window total, occlusion state, ground-truth
+error). Occlusion/window-total are gate-and-mask concepts that don't
+apply to this architecture, so this script reports what DOES apply
+here: which neighbors a token's self-attention weighted most heavily,
+and how concentrated its cross-attention was over its own local window
+(alongside ground-truth error, matched via match_tokens_to_state exactly
+like diagnose_token_dropout.py). Built alongside the architecture (see
 docs/superpowers/specs/2026-09-23-token-track-query-design.md's
 Diagnostics section) so a still-dropping-out seed can be inspected for
 WHAT changed in kind (e.g. attention diffusing across two tokens during
 a close approach), not just whether the aggregate dropout count moved.
+
+Reads TrackQueryDynamics._self_attention/_cross_attention_one directly
+with `return_weights=True` rather than recomputing their math in a
+second copy -- an earlier version of this script did the latter and
+drifted out of sync with the real forward pass (wrong velocities fed to
+the query, no window-widening, and a crash on an off-grid token -- see
+final review of docs/superpowers/plans/2026-09-23-token-track-query.md).
 
 Usage:
     PYTHONPATH=. python3 scripts/visualize_track_query_attention.py \
@@ -25,7 +33,8 @@ import torch
 import bounce
 from model.dataset import make_scenario_uniform
 from model.token_model import TokenModel
-from model.token_graph import build_radius_graph
+from model.token_match import match_tokens_to_state
+from model.token_rasterize import rasterize_tokens
 
 
 def simulate(n, num_balls, seed, num_steps, dt=0.15, gravity=9.0, radius=0.75,
@@ -35,72 +44,57 @@ def simulate(n, num_balls, seed, num_steps, dt=0.15, gravity=9.0, radius=0.75,
     G = bounce.make_grid(n)
     bounce.splat_all(G, n, balls, radius)
     frames = [np.array(G, dtype=np.float32)]
+    states = [{"x": [b["x"] for b in balls], "y": [b["y"] for b in balls]}]
     for _ in range(num_steps):
         bounce.step(G, n, balls, dt, gravity, radius, stiffness, substeps)
         frames.append(np.array(G, dtype=np.float32))
-    return frames
+        states.append({"x": [b["x"] for b in balls], "y": [b["y"] for b in balls]})
+    return frames, states
 
 
-def self_attention_weights(dynamics, positions, velocities, hidden):
-    """Recomputes _self_attention's per-edge softmax weights (not just
-    its pooled output) for inspection -- mirrors
-    TrackQueryDynamics._self_attention exactly, since that method itself
-    only returns the pooled sum, not the weights."""
-    n = positions.shape[0]
-    node_state = torch.cat([velocities, hidden], dim=-1)
-    q = dynamics.self_query(node_state)
-    edge_index = build_radius_graph(positions, dynamics.neighbor_radius)
-    self_loops = torch.arange(n)
-    self_loops = torch.stack([self_loops, self_loops], dim=0)
-    edge_index = torch.cat([edge_index, self_loops], dim=1)
-    if edge_index.shape[1] == 0:
-        return {}
-    src, dst = edge_index[0], edge_index[1]
-    rel_pos = positions[src] - positions[dst]
-    edge_input = torch.cat([node_state[src], rel_pos], dim=-1)
-    k = dynamics.self_key(edge_input)
-    scores = (q[dst] * k).sum(dim=-1) / (dynamics.hidden_dim ** 0.5)
-    weights = torch.exp(scores - scores.max())
-    denom = torch.zeros(n)
-    denom = denom.index_add(0, dst, weights)
-    weights = weights / denom[dst].clamp(min=1e-6)
-    by_dst = {}
-    for e in range(edge_index.shape[1]):
-        d, s, w = int(dst[e]), int(src[e]), float(weights[e])
-        by_dst.setdefault(d, []).append((s, w))
-    return by_dst
+def step_with_attention(dynamics, positions, velocities, hidden, observed_frame):
+    """Mirrors TrackQueryDynamics.forward's own orchestration exactly
+    (same call order, same GRU input concatenation), but calls
+    _self_attention/_cross_attention_one with return_weights=True so
+    this script sees the actual weights forward() used, instead of a
+    second, possibly-drifted computation of the same math."""
+    attn_out_self, self_edge_weights = dynamics._self_attention(
+        positions, velocities, hidden, return_weights=True
+    )
+    query_vecs = dynamics.cross_query(attn_out_self)
 
-
-def cross_attention_concentration(dynamics, positions, hidden, observed_frame):
-    """Runs _cross_attention_one per token and reports each one's max
-    softmax weight (close to 1/window_size = diffuse/uncertain, close to
-    1.0 = confidently locked onto one cell) -- the cross-attention analog
-    of asking whether a token's read was decisive or smeared."""
-    query_vecs = dynamics.cross_query(dynamics._self_attention(
-        positions, torch.zeros_like(positions), hidden
-    ))
     prob, vx, vy = observed_frame[0], observed_frame[1], observed_frame[2]
-    results = []
+    readouts = []
+    obs_positions = []
+    cross_window_infos = []
     for i in range(positions.shape[0]):
-        n = prob.shape[0]
-        cx = int(round(float(positions[i, 0])))
-        cy = int(round(float(positions[i, 1])))
-        half = int(np.ceil(dynamics.radius + dynamics.margin))
-        i_lo, i_hi = max(0, cx - half), min(n - 1, cx + half)
-        j_lo, j_hi = max(0, cy - half), min(n - 1, cy + half)
-        window_prob = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
-        window_vx = vx[i_lo:i_hi + 1, j_lo:j_hi + 1]
-        window_vy = vy[i_lo:i_hi + 1, j_lo:j_hi + 1]
-        ii = torch.arange(i_lo, i_hi + 1, dtype=prob.dtype).view(-1, 1)
-        jj = torch.arange(j_lo, j_hi + 1, dtype=prob.dtype).view(1, -1)
-        dx = (ii - positions[i, 0]).expand_as(window_prob)
-        dy = (jj - positions[i, 1]).expand_as(window_prob)
-        cell_feat = torch.stack([window_prob, window_vx, window_vy, dx, dy], dim=-1).reshape(-1, 5)
-        k = dynamics.cross_key(cell_feat)
-        scores = (query_vecs[i].unsqueeze(0) * k).sum(dim=-1) / (dynamics.hidden_dim ** 0.5)
-        weights = torch.softmax(scores, dim=0)
-        results.append(float(weights.max()))
-    return results
+        readout, obs_pos, window_info = dynamics._cross_attention_one(
+            prob, vx, vy, positions[i], query_vecs[i], return_weights=True
+        )
+        readouts.append(readout)
+        obs_positions.append(obs_pos)
+        cross_window_infos.append(window_info)
+    cross_readout = torch.stack(readouts, dim=0)
+    obs_pos = torch.stack(obs_positions, dim=0)
+
+    gru_input = torch.cat([attn_out_self, cross_readout], dim=-1)
+    new_hidden = dynamics.gru(gru_input, hidden)
+    delta = dynamics.delta_head(new_hidden)
+    delta_pos, delta_vel = delta[:, :2], delta[:, 2:]
+    return delta_pos, delta_vel, new_hidden, obs_pos, self_edge_weights, cross_window_infos
+
+
+def format_self_attention(self_edge_weights, num_tokens, this_token):
+    if self_edge_weights is None:
+        return ""
+    src, dst, weights = self_edge_weights
+    neighbors = [
+        (int(src[e]), float(weights[e]))
+        for e in range(dst.shape[0])
+        if int(dst[e]) == this_token and int(src[e]) != this_token
+    ]
+    neighbors.sort(key=lambda p: -p[1])
+    return ", ".join(f"tok{s}:{w:.2f}" for s, w in neighbors)
 
 
 def main():
@@ -120,23 +114,43 @@ def main():
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
 
-    frames = simulate(args.n, args.num_balls, args.seed, args.num_steps, gravity=args.gravity)
+    frames, states = simulate(args.n, args.num_balls, args.seed, args.num_steps, gravity=args.gravity)
     g0 = torch.from_numpy(frames[0].transpose(2, 0, 1))
     g1 = torch.from_numpy(frames[1].transpose(2, 0, 1))
 
     with torch.no_grad():
         positions, velocities, hidden = model.init_tokens(g0, g1)
+        state1 = {k: torch.tensor(v, dtype=torch.float32) for k, v in states[1].items()}
+        token_to_ball = match_tokens_to_state(positions, state1)
+
         observed = g1
         for step in range(args.num_steps - 1):
-            self_weights = self_attention_weights(model.dynamics, positions, velocities, hidden)
-            cross_conc = cross_attention_concentration(model.dynamics, positions, hidden, observed)
+            gt_state = states[step + 1]
+            gt_pos = torch.stack([
+                torch.tensor(gt_state["x"], dtype=torch.float32),
+                torch.tensor(gt_state["y"], dtype=torch.float32),
+            ], dim=1)
+
+            delta_pos, delta_vel, new_hidden, obs_pos, self_edge_weights, cross_window_infos = \
+                step_with_attention(model.dynamics, positions, velocities, hidden, observed)
+
             print(f"--- step {step} ---")
             for t in range(positions.shape[0]):
-                neighbors = sorted(self_weights.get(t, []), key=lambda p: -p[1])
-                neighbor_str = ", ".join(f"tok{s}:{w:.2f}" for s, w in neighbors if s != t)
-                print(f"  token {t}: self_attn->[{neighbor_str}] cross_attn_max={cross_conc[t]:.3f}")
-            positions, velocities, hidden, pred_grid, _ = model.step(positions, velocities, hidden, observed)
-            observed = pred_grid
+                ball = int(token_to_ball[t])
+                gt_err = float(torch.norm(positions[t] - gt_pos[ball]))
+                self_str = format_self_attention(self_edge_weights, positions.shape[0], t)
+                window_info = cross_window_infos[t]
+                if window_info is None:
+                    cross_str = "BAILOUT (no mass in any expansion)"
+                else:
+                    w = window_info["weights"]
+                    cross_str = f"max={float(w.max()):.3f} window={tuple(w.shape)}"
+                print(f"  token {t} (ball {ball}): gt_err={gt_err:.3f} self_attn->[{self_str}] cross_attn: {cross_str}")
+
+            final_pos = positions + velocities * model.dt + delta_pos
+            final_vel = velocities + delta_vel
+            positions, velocities, hidden = final_pos, final_vel, new_hidden
+            observed = rasterize_tokens(final_pos, final_vel, model.n, model.radius)
 
 
 if __name__ == "__main__":

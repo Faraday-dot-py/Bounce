@@ -116,6 +116,18 @@ class TokenModel(torch.nn.Module):
         # exact code path stays byte-for-byte unchanged and reachable as
         # the reference baseline.
         self.track_query = track_query
+        if track_query and (territory_masking or velocity_weight > 0.0):
+            # Both are v9-path-only options (occluding_mask/centroid_near
+            # blending) -- track_query's step branch never reads either
+            # one, so silently accepting the combination would produce a
+            # model whose flags claim a combined experiment that never
+            # actually runs (final review of
+            # docs/superpowers/plans/2026-09-23-token-track-query.md).
+            raise ValueError(
+                "track_query is incompatible with territory_masking/velocity_weight "
+                "(v9-path-only options) -- track_query has its own observation-"
+                "correction mechanism (TrackQueryDynamics's cross-attention stage)"
+            )
         if track_query:
             self.dynamics = TrackQueryDynamics(
                 hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,

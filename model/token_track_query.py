@@ -51,7 +51,13 @@ class TrackQueryDynamics(nn.Module):
         nn.init.zeros_(self.delta_head.weight)
         nn.init.zeros_(self.delta_head.bias)
 
-    def _self_attention(self, positions, velocities, hidden):
+    def _self_attention(self, positions, velocities, hidden, return_weights=False):
+        """return_weights=True additionally returns (src, dst, weights) --
+        the per-edge softmax weights this method itself computes but
+        normally discards after pooling into attn_out -- so a diagnostic
+        caller (scripts/visualize_track_query_attention.py) can inspect
+        exactly what forward() used, instead of recomputing this method's
+        math in a second copy that can drift out of sync with it."""
         n = positions.shape[0]
         node_state = torch.cat([velocities, hidden], dim=-1)
         q = self.self_query(node_state)
@@ -61,6 +67,7 @@ class TrackQueryDynamics(nn.Module):
         self_loops = torch.stack([self_loops, self_loops], dim=0)
         edge_index = torch.cat([edge_index, self_loops], dim=1)
         attn_out = torch.zeros(n, self.hidden_dim, device=positions.device, dtype=positions.dtype)
+        edge_weights = None
         if edge_index.shape[1] > 0:
             src, dst = edge_index[0], edge_index[1]
             rel_pos = positions[src] - positions[dst]
@@ -73,9 +80,13 @@ class TrackQueryDynamics(nn.Module):
             denom = denom.index_add(0, dst, weights)
             weights = weights / denom[dst].clamp(min=1e-6)
             attn_out = attn_out.index_add(0, dst, weights.unsqueeze(-1) * v)
+            if return_weights:
+                edge_weights = (src, dst, weights)
+        if return_weights:
+            return attn_out, edge_weights
         return attn_out
 
-    def _cross_attention_one(self, prob, vx, vy, position, query_vec):
+    def _cross_attention_one(self, prob, vx, vy, position, query_vec, return_weights=False):
         """Cross-attention for one token's bounded local window --
         replaces occluding_mask + centroid_near entirely in this path.
         Gathers the same window centroid_near searches (base half-width
@@ -89,7 +100,16 @@ class TrackQueryDynamics(nn.Module):
         diagnostic/bookkeeping byproduct (never a hard blend). If every
         expansion's window is empty, falls back to an all-zero readout
         and obs_pos == position -- there is no mask here, so there is no
-        masked-then-unmasked retry to replicate (unlike centroid_near)."""
+        masked-then-unmasked retry to replicate (unlike centroid_near).
+
+        return_weights=True additionally returns a third value: a dict
+        with the actual window bounds and softmax weights this call
+        settled on (whichever expansion succeeded, or None if every
+        expansion was empty) -- so a diagnostic caller can see exactly
+        which cells and weights this method used, instead of
+        recomputing the window-search in a second copy that can drift
+        out of sync with it (in particular, silently missing the
+        widening this method does)."""
         n = prob.shape[0]
         cx = int(round(float(position[0].detach())))
         cy = int(round(float(position[1].detach())))
@@ -122,7 +142,15 @@ class TrackQueryDynamics(nn.Module):
             centroid_dx = (weights * dx.reshape(-1)).sum()
             centroid_dy = (weights * dy.reshape(-1)).sum()
             obs_pos = position + torch.stack([centroid_dx, centroid_dy])
+            if return_weights:
+                window_info = {
+                    "i_lo": i_lo, "i_hi": i_hi, "j_lo": j_lo, "j_hi": j_hi,
+                    "weights": weights.reshape(window_prob.shape),
+                }
+                return readout, obs_pos, window_info
             return readout, obs_pos
+        if return_weights:
+            return query_vec.new_zeros(self.hidden_dim), position, None
         return query_vec.new_zeros(self.hidden_dim), position
 
     def forward(self, positions, velocities, hidden, observed_frame):

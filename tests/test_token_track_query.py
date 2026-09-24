@@ -31,6 +31,52 @@ def test_self_attention_gradients_flow_to_attention_parameters():
     assert torch.any(model.self_query.weight.grad != 0.0)
 
 
+def test_self_attention_single_token_still_carries_gradient_via_self_loop():
+    # A single token has no radius-graph neighbors, only its self-loop --
+    # a softmax group of size 1 whose weight is always exactly 1.0
+    # regardless of score, so self_query/self_key get zero gradient there
+    # (same documented property as TokenDynamics). But the group still
+    # exists: self_value's output IS the pooled result (weight 1.0 times
+    # its own value), and the output still depends on hidden state, so
+    # this is not a dead path -- self_value and the input hidden state
+    # must still carry gradient.
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    positions = torch.tensor([[5.0, 5.0]])
+    velocities = torch.tensor([[1.0, -0.5]])
+    hidden = torch.randn(1, 8, requires_grad=True)
+    out = model._self_attention(positions, velocities, hidden)
+    out.sum().backward()
+    assert model.self_value.weight.grad is not None
+    assert torch.any(model.self_value.weight.grad != 0.0)
+    assert hidden.grad is not None
+    assert torch.any(hidden.grad != 0.0)
+
+
+def test_self_attention_return_weights_matches_pooled_output():
+    # return_weights=True must be a pure addition -- the pooled attn_out
+    # it returns alongside the weights must be identical to what
+    # return_weights=False returns, and the returned (src, dst, weights)
+    # must reproduce attn_out via the same index_add/normalize this
+    # method does internally (proves the exposed weights are the real
+    # ones used, not a second, possibly-drifted computation).
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=4.0)
+    positions = torch.tensor([[5.0, 5.0], [6.0, 5.0], [5.5, 6.0]])
+    velocities = torch.tensor([[1.0, -0.5], [0.25, 2.0], [-1.0, 0.0]])
+    hidden = torch.randn(3, 8)
+
+    plain_out = model._self_attention(positions, velocities, hidden)
+    out, edge_weights = model._self_attention(positions, velocities, hidden, return_weights=True)
+    assert torch.allclose(out, plain_out)
+
+    src, dst, weights = edge_weights
+    node_state = torch.cat([velocities, hidden], dim=-1)
+    v = model.self_value(torch.cat([node_state[src], positions[src] - positions[dst]], dim=-1))
+    reconstructed = torch.zeros(3, 8).index_add(0, dst, weights.unsqueeze(-1) * v)
+    assert torch.allclose(reconstructed, out, atol=1e-5)
+
+
 def test_self_attention_isolated_token_unaffected_by_distant_tokens():
     torch.manual_seed(4738)
     model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
@@ -81,15 +127,23 @@ def test_cross_attention_finds_mass_and_returns_centroid_near_position():
     # correctness) from cross_key/cross_value's untrained random init,
     # which would otherwise make obs_pos an arbitrary learned readout
     # with no reason to be near the true ball position before training.
-    # A uniform weighting over a window centered on `position` averages
-    # dx/dy to exactly 0 by symmetry, so obs_pos should land on
-    # `position` itself, not just nearby.
+    # A uniform weighting over a window recovers the window's own
+    # geometric center regardless of where `position` sits inside it, so
+    # querying from an off-center position (10.3, not the ball's exact
+    # 10.0) and asserting obs_pos == 10.0 (not 10.3) proves this is a
+    # real read of window content -- not the empty-window fallback,
+    # which would instead return obs_pos == position (10.3) unchanged.
+    # (Ball, window and rounded query all still line up on cell 10, so
+    # this isolates window-gather/geometry correctness the same way the
+    # on-center version did, just without an ambiguity against the
+    # fallback path.)
     nn.init.zeros_(model.cross_key.weight)
     nn.init.zeros_(model.cross_key.bias)
     prob, vx, vy = _grid_with_ball(20, 10.0, 10.0)
     query_vec = torch.randn(8)
-    readout, obs_pos = model._cross_attention_one(prob, vx, vy, torch.tensor([10.0, 10.0]), query_vec)
+    readout, obs_pos = model._cross_attention_one(prob, vx, vy, torch.tensor([10.3, 10.3]), query_vec)
     assert readout.shape == (8,)
+    assert torch.any(readout != 0.0)
     assert torch.allclose(obs_pos, torch.tensor([10.0, 10.0]), atol=1e-4)
 
 
@@ -131,6 +185,41 @@ def test_cross_attention_translation_invariant():
     )
     assert torch.allclose(readout, readout_s, atol=1e-5)
     assert torch.allclose(obs_pos_s - obs_pos, torch.tensor([float(shift), float(shift)]), atol=1e-5)
+
+
+def test_cross_attention_return_weights_matches_plain_output_and_reports_actual_window():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, radius=0.75, margin=1.0, max_expansions=6)
+    prob, vx, vy = _grid_with_ball(20, 10.0, 10.0)
+    query_vec = torch.randn(8)
+
+    readout, obs_pos = model._cross_attention_one(prob, vx, vy, torch.tensor([10.0, 10.0]), query_vec)
+    readout_w, obs_pos_w, window_info = model._cross_attention_one(
+        prob, vx, vy, torch.tensor([10.0, 10.0]), query_vec, return_weights=True
+    )
+    assert torch.allclose(readout, readout_w)
+    assert torch.allclose(obs_pos, obs_pos_w)
+    assert window_info is not None
+    assert abs(window_info["weights"].sum().item() - 1.0) < 1e-5
+    assert window_info["i_lo"] <= 10 <= window_info["i_hi"]
+    assert window_info["j_lo"] <= 10 <= window_info["j_hi"]
+
+
+def test_cross_attention_return_weights_reports_none_on_empty_window():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, radius=0.75, margin=1.0, max_expansions=2)
+    n = 20
+    prob = torch.zeros(n, n)
+    vx = torch.zeros(n, n)
+    vy = torch.zeros(n, n)
+    position = torch.tensor([10.0, 10.0])
+    query_vec = torch.randn(8)
+    readout, obs_pos, window_info = model._cross_attention_one(
+        prob, vx, vy, position, query_vec, return_weights=True
+    )
+    assert window_info is None
+    assert torch.allclose(readout, torch.zeros(8))
+    assert torch.allclose(obs_pos, position)
 
 
 def _random_frame(n, num_balls, seed=4738):

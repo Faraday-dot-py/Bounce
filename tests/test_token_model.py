@@ -394,6 +394,24 @@ def test_track_query_step_coasts_at_constant_velocity_when_delta_head_is_zero_in
     assert torch.allclose(new_vel, velocities, atol=1e-5)
 
 
+def test_track_query_step_handles_zero_tokens():
+    torch.manual_seed(4738)
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, hidden_dim=8, track_query=True)
+    positions = torch.zeros(0, 2)
+    velocities = torch.zeros(0, 2)
+    hidden = torch.zeros(0, model.dynamics.hidden_dim)
+    observed_frame = torch.zeros(3, n, n)
+
+    new_pos, new_vel, new_hidden, pred_grid, obs_pos = model.step(positions, velocities, hidden, observed_frame)
+
+    assert new_pos.shape == (0, 2)
+    assert new_vel.shape == (0, 2)
+    assert new_hidden.shape == (0, model.dynamics.hidden_dim)
+    assert pred_grid.shape == (3, n, n)
+    assert obs_pos.shape == (0, 2)
+
+
 def test_track_query_model_uses_track_query_dynamics():
     from model.token_track_query import TrackQueryDynamics
     model = TokenModel(n=20, radius=0.75, dt=0.15, track_query=True)
@@ -404,3 +422,20 @@ def test_default_model_still_uses_token_dynamics():
     from model.token_net import TokenDynamics
     model = TokenModel(n=20, radius=0.75, dt=0.15)
     assert isinstance(model.dynamics, TokenDynamics)
+
+
+def test_track_query_rejects_territory_masking():
+    # territory_masking is a v9-path-only option (occluding_mask +
+    # centroid_near); track_query's step branch never looks at it, so
+    # silently accepting both would produce a model whose flags claim a
+    # combined experiment that never actually runs (see final review of
+    # docs/superpowers/plans/2026-09-23-token-track-query.md).
+    import pytest
+    with pytest.raises(ValueError):
+        TokenModel(n=20, radius=0.75, dt=0.15, track_query=True, territory_masking=True)
+
+
+def test_track_query_rejects_velocity_weight():
+    import pytest
+    with pytest.raises(ValueError):
+        TokenModel(n=20, radius=0.75, dt=0.15, track_query=True, velocity_weight=0.5)
