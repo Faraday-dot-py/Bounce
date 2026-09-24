@@ -2162,3 +2162,24 @@ steps ~3-20; beyond ~25 no model can track identity from two frames.
 Consequence: position-error-at-300 and swap counts at 300 steps are not
 meaningful comparators; swap count at 300 (~139-144 of ~170 tokens) is
 saturated by chaos, not model quality.
+
+### Horizontal velocity source (2026-09-24)
+
+Not drift: `bounce.py` `compute_forces` sets `base_x = gravity + wfx`, so
+gravity (9.0) acts along **x** (the first coordinate); y has no gravity.
+"Horizontal velocity" is the gravity axis when x is drawn horizontally.
+`scripts/probe_vx_drift.py`, 44 seeds, mean over 4 tokens:
+
+| step | truth mean vx | v18 mean vx | truth speed | v18 speed |
+|---|---|---|---|---|
+| 1 | 0.90 | 0.96 | 2.46 | 2.84 |
+| 5 | 5.16 | 5.29 | 6.20 | 5.86 |
+| 10 | 4.01 | 3.30 | 9.03 | 6.75 |
+| 20 | -1.52 | -0.90 | 6.00 | 2.62 |
+| 50 | 1.36 | -0.24 | 6.94 | 2.23 |
+| 100 | 0.09 | -0.56 | 7.87 | 2.88 |
+
+v18 matches truth through step ~5, then loses kinetic energy: speed ~2.5-2.9
+from step 20 on vs truth 6-8 (mean |vx| 1.4 vs 5.0 at 100). The
+long-horizon blob "bunching" in the frame review is consistent with this
+energy loss (a damped model), separate from the chaos limit.
