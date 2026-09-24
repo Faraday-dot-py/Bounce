@@ -154,24 +154,39 @@ class TrackQueryDynamics(nn.Module):
         return query_vec.new_zeros(self.hidden_dim), position
 
     def forward(self, positions, velocities, hidden, observed_frame):
+        # n==0 is not special-cased with an early return: TokenDynamics
+        # (this module's non-track_query counterpart) always routes its
+        # zero-token output through gru/delta_head regardless of token
+        # count, which keeps a grad_fn even when the pooled input is a
+        # bare zeros tensor (the parameterized layers' own weights are
+        # enough for autograd to connect the output to the graph). An
+        # earlier version of this method instead early-returned bare
+        # positions.new_zeros(...)/hidden.new_zeros(...) for n==0,
+        # bypassing gru/delta_head entirely -- those outputs had no
+        # grad_fn at all, which crashed loss.backward() the moment a
+        # training batch's rollout sample had zero tokens at every step
+        # (reproduced directly: job 2868, batch 6800, "element 0 of
+        # tensors does not require grad and does not have a grad_fn").
         n = positions.shape[0]
-        if n == 0:
-            zeros2 = positions.new_zeros((0, 2))
-            zeros_h = hidden.new_zeros((0, self.hidden_dim))
-            return zeros2, zeros2, zeros_h, zeros2
-
         attn_out_self = self._self_attention(positions, velocities, hidden)
         query_vecs = self.cross_query(attn_out_self)
 
         prob, vx, vy = observed_frame[0], observed_frame[1], observed_frame[2]
-        readouts = []
-        obs_positions = []
-        for i in range(n):
-            readout, obs_pos = self._cross_attention_one(prob, vx, vy, positions[i], query_vecs[i])
-            readouts.append(readout)
-            obs_positions.append(obs_pos)
-        cross_readout = torch.stack(readouts, dim=0)
-        obs_pos = torch.stack(obs_positions, dim=0)
+        if n == 0:
+            # torch.stack on an empty Python list raises -- build the
+            # (0, hidden_dim)/(0, 2) shapes directly instead of looping
+            # zero times and stacking nothing.
+            cross_readout = query_vecs.new_zeros((0, self.hidden_dim))
+            obs_pos = positions.new_zeros((0, 2))
+        else:
+            readouts = []
+            obs_positions = []
+            for i in range(n):
+                readout, obs_pos_i = self._cross_attention_one(prob, vx, vy, positions[i], query_vecs[i])
+                readouts.append(readout)
+                obs_positions.append(obs_pos_i)
+            cross_readout = torch.stack(readouts, dim=0)
+            obs_pos = torch.stack(obs_positions, dim=0)
 
         gru_input = torch.cat([attn_out_self, cross_readout], dim=-1)
         new_hidden = self.gru(gru_input, hidden)

@@ -282,6 +282,30 @@ def test_forward_empty_token_set():
     assert not torch.isnan(delta_pos).any()
 
 
+def test_forward_empty_token_set_output_stays_connected_to_the_graph():
+    # A rollout sample whose EVERY step has zero tokens must still let
+    # loss.backward() succeed if this step's output is the only term
+    # contributing to that sample's loss -- reproduces a real training
+    # crash (job 2868, batch 6800: "element 0 of tensors does not
+    # require grad and does not have a grad_fn"). The early-return zero
+    # tensors in forward()'s n==0 branch were bare torch.new_zeros(...)
+    # calls, never passed through any parameterized layer (gru,
+    # delta_head), unlike TokenDynamics's n==0 path which always routes
+    # through gru/delta_head regardless of token count and so always
+    # keeps a grad_fn.
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    n = 20
+    observed_frame = torch.zeros(3, n, n)
+    positions = torch.zeros(0, 2)
+    velocities = torch.zeros(0, 2)
+    hidden = torch.zeros(0, 8)
+    delta_pos, delta_vel, new_hidden, obs_pos = model(positions, velocities, hidden, observed_frame)
+    assert new_hidden.requires_grad
+    new_hidden.sum().backward()  # must not raise
+    assert model.gru.weight_ih.grad is not None
+
+
 def test_forward_permutation_equivariant():
     torch.manual_seed(4738)
     model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=4.0)
