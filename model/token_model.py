@@ -306,15 +306,15 @@ class TokenModel(torch.nn.Module):
         next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
         return final_pos, final_vel, new_hidden, next_grid, obs_pos
 
-    def step_free(self, positions, velocities, hidden):
+    def step_free(self, positions, velocities, hidden, render=True):
         """Observation-free step: no frame is read, so a token can never
         lose its ball to a faded self-rendered observation -- see
         docs/superpowers/specs/2026-09-23-token-free-rollout-design.md.
-        The rasterized grid is output only."""
+        The rasterized grid is output only; render=False skips it (None)."""
         if not self.free_rollout:
             raise RuntimeError("step_free requires TokenModel(free_rollout=True)")
         delta_pos, delta_vel, new_hidden = self.dynamics(positions, velocities, hidden)
         final_pos = positions + velocities * self.dt + delta_pos
         final_vel = velocities + delta_vel
-        next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius)
+        next_grid = rasterize_tokens(final_pos, final_vel, self.n, self.radius) if render else None
         return final_pos, final_vel, new_hidden, next_grid

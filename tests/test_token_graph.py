@@ -33,3 +33,14 @@ def test_build_radius_graph_crosses_tile_boundary_when_positions_are_absolute():
 
     edges_tile_a_alone = build_radius_graph(tile_a, neighbor_radius=2.0)
     assert edges_tile_a_alone.shape[1] == 0  # the cross-boundary neighbor is invisible in isolation
+
+
+def test_cell_graph_matches_dense_graph():
+    from model.token_graph import build_radius_graph_cells
+    torch.manual_seed(4738)
+    for count in (2, 5, 60, 300):
+        positions = torch.rand(count, 2) * 30.0 - 5.0
+        dense = build_radius_graph(positions, 4.0)
+        cells = build_radius_graph_cells(positions, 4.0)
+        assert set(map(tuple, dense.t().tolist())) == set(map(tuple, cells.t().tolist()))
+        assert dense.shape == cells.shape

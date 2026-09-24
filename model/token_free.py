@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from model.token_graph import build_radius_graph
+from model.token_graph import build_radius_graph, build_radius_graph_cells
 
 
 def wall_features(positions, n, wall_range):
@@ -63,6 +63,7 @@ class TokenFreeDynamics(nn.Module):
         self.mirror_sym = mirror_sym
         self.hidden_dim = hidden_dim * (2 if mirror_sym else 1)
         self.neighbor_radius = neighbor_radius
+        self.cell_graph = False
         self.wall_range = wall_range
         wall_dim = 4 + (8 if wall_lookahead else 0)
         node_dim = 2 + wall_dim + self.core_dim
@@ -118,7 +119,8 @@ class TokenFreeDynamics(nn.Module):
         node_state = torch.cat([velocities, walls, hidden], dim=-1)
         q = self.query(node_state)
 
-        edge_index = build_radius_graph(positions, self.neighbor_radius)
+        graph = build_radius_graph_cells if self.cell_graph else build_radius_graph
+        edge_index = graph(positions, self.neighbor_radius)
         pair_edges = edge_index
         self_loops = torch.arange(n, device=positions.device)
         self_loops = torch.stack([self_loops, self_loops], dim=0)
