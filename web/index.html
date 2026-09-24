@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounce Token Model</title>
+<style>
+:root {
+  --bg: #0d0f14; --panel: #151922; --line: #262c3a; --fg: #e6ebf5; --dim: #97a1b6;
+  --neg: #3a80eb; --pos: #ed8014; --accent: #7fb2ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+body { padding: 10px 16px 24px; max-width: 1500px; margin: 0 auto; }
+h1 { font-size: 17px; margin: 4px 0 2px; font-weight: 600; }
+.sub { color: var(--dim); margin: 0 0 10px; font-size: 13px; }
+main { display: grid; grid-template-columns: minmax(300px, 560px) 1fr; gap: 12px; align-items: start; }
+.left { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.arenas { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.arenas.two { grid-template-columns: 1fr 1fr; }
+.arena { position: relative; min-width: 0; }
+.arena canvas { width: 100%; aspect-ratio: 1; display: block; background: #000; border: 1px solid var(--line); border-radius: 4px; touch-action: none; cursor: crosshair; }
+.arena .tag { position: absolute; left: 6px; top: 4px; font-size: 11px; color: var(--dim); pointer-events: none; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+button { background: #202636; color: var(--fg); border: 1px solid #333c52; border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer; min-height: 32px; }
+button:hover { background: #2a3248; }
+button[aria-pressed="true"] { background: #23406b; border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+label { color: var(--dim); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+input[type=range] { width: 120px; }
+.stats { font: 12px ui-monospace, Menlo, monospace; color: var(--dim); display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+.stats b { color: var(--fg); font-weight: 500; }
+.viz { position: relative; height: min(78vh, 900px); min-height: 380px; background: #0d0f14; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.viz canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.viz canvas.ov { pointer-events: none; }
+.legend { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; pointer-events: none; flex-wrap: wrap; }
+.legend .bar { width: 140px; height: 10px; border-radius: 2px; background: linear-gradient(90deg, #b8e0ff, #3880ec 30%, #22262f 50%, #ed8014 70%, #ffe080); border: 1px solid #333; }
+.hint { position: absolute; right: 10px; top: 8px; font-size: 11px; color: var(--dim); text-align: right; pointer-events: none; }
+footer { margin-top: 14px; color: var(--dim); font-size: 12px; max-width: 900px; }
+kbd { background: #202636; border: 1px solid #333c52; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  .viz { height: 70vh; }
+  input[type=range] { width: 90px; }
+}
+</style>
+</head>
+<body>
+<h1>Bounce token model, live in the browser</h1>
+<p class="sub">A 13k-parameter learned emulator (one token per ball: radius-graph attention, GRU, wall head, pair-impulse head) stepping a 100x100 arena. Inference is plain JavaScript. Cubes are the network's activations for the selected ball.</p>
+<main>
+  <div class="left">
+    <div class="arenas" id="arenas">
+      <div class="arena"><canvas id="arena" width="600" height="600" aria-label="model arena"></canvas><span class="tag">token model</span></div>
+      <div class="arena" id="gtWrap" hidden><canvas id="gt" width="600" height="600" aria-label="ground truth arena"></canvas><span class="tag">ground truth (bounce.py port)</span></div>
+    </div>
+    <div class="panel">
+      <div class="row">
+        <button id="pause" aria-pressed="false" title="space">Pause</button>
+        <button id="step" title=".">Step</button>
+        <button id="add" title="add 10 balls">+10 balls</button>
+        <button id="clear" title="c">Clear</button>
+        <button id="reset" title="r">Reset</button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label>speed <input type="range" id="speed" min="1" max="120" value="30"><span id="speedv">30</span> ticks/s</label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button id="edges" title="e">Edges: selected</button>
+        <button id="gtbtn" aria-pressed="false" title="g">Ground truth</button>
+        <button id="wbtn" aria-pressed="true" title="w">Weights</button>
+        <button id="lbtn" aria-pressed="true" title="l">Labels</button>
+        <button id="cam">Reset camera</button>
+      </div>
+    </div>
+    <div class="panel stats" id="stats"></div>
+  </div>
+  <div>
+    <div class="viz" id="viz">
+      <canvas id="gl"></canvas><canvas id="ov" class="ov"></canvas>
+      <div class="legend"><span>negative</span><span class="bar"></span><span>positive</span></div>
+      <div class="hint">drag orbit, shift/right-drag pan, wheel zoom, hover for values</div>
+    </div>
+  </div>
+</main>
+<footer>
+  Click empty space (hold to stream) to add balls, click a ball to inspect it. Keys: <kbd>space</kbd> pause, <kbd>.</kbd> step, <kbd>c</kbd> clear, <kbd>r</kbd> reset, <kbd>e</kbd> attention edges, <kbd>g</kbd> ground truth, <kbd>w</kbd> weights.
+  Faithfulness: this is a learned emulator (soup B, ~13k parameters), not the physics. Energy drifts and trajectories diverge from the true physics after roughly 20 steps; very dense piles are outside its training distribution and are caught by a containment guard. Colour is a blue/orange diverging map, symmetric about zero (about 0.5 for the gates). Source and weights: <a href="https://github.com/Faraday-dot-py/Bounce/tree/viz-web" style="color:var(--accent)">Faraday-dot-py/Bounce</a>.
+</footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
