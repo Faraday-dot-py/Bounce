@@ -2525,3 +2525,22 @@ token-count mismatch seeds 8 -> 0; position error at step 1/2/3/5/10/15/20
 merged-ball seeds now contribute all their balls (previously scored only on
 the detected tokens), which raises early steps slightly; steps 10-20 improve
 despite that. v28 retrains v25's recipe with `--ball-split`.
+
+### v26 intermediate (stage 26 of 40), cancelled (2026-09-24)
+
+Job 2887 (v25 recipe + 40-step unroll curriculum on the h44 dataset, 3 chunks
+per stage max), cancelled at stage 26 after 74 min to free the GPU for v28;
+checkpoint kept (`token_model_h44_v26_intermediate.pt`, stage 26 chunk 1).
+48 seeds, position error at step 1/2/3/5/10/15/20/50/100: 0.098 / 0.148 /
+0.222 / 0.410 / 1.255 / 2.682 / 4.081 / 7.14 / 7.66 (v25: 0.094 / 0.119 /
+0.155 / 0.228 / 0.816 / 2.218 / 3.357 / 6.89 / 7.77). Mean speed 4.55 @20,
+3.79 @50, 1.81 @100 (v25: 4.7 / 3.6 / 2.2; truth 6.0 / 6.9 / 7.9).
+
+Read: training on long unrolls (26 steps, 25% replay of shorter) worsened
+short-horizon accuracy (step 5 +80%, step 10 +54%) without improving energy
+retention, in contrast to the energy-audit fine-tune from v24 (which
+improved err@10/20 and speed@100). Likely the from-scratch curriculum's
+later stages trade short-step accuracy for long-horizon loss under chaotic
+gradients; longer unrolls are not the fix for this recipe. v27
+(speed-magnitude loss) was cancelled before starting; it can be retried on the
+24-step recipe.
