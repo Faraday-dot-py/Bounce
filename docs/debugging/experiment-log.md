@@ -2381,3 +2381,13 @@ v21 checkpoint with refinement, no retrain (`eval_v21_refine_noretrain.json`),
 position error at step 1/2/3/5/10/20: 0.091 / 0.136 / 0.193 / 0.324 / 1.104 /
 3.772 (v21: 0.270 / 0.292 / 0.329 / 0.436 / 1.133 / 3.951). The gain fades by
 step 10, so past that the dynamics (wall/pair contact) dominate.
+
+### v22 = v21 + wall-lookahead features (2026-09-24)
+
+Job 2881, 25m26s. 48 seeds, position error at step 1/2/3/5/10/15/20/50
+(`eval_v22_short.json`): 0.266 / 0.287 / 0.320 / 0.406 / 1.130 / 2.861 / 4.403
+/ 8.97 (v21: 0.270 / 0.292 / 0.329 / 0.436 / 1.133 / 2.678 / 3.951 / 7.27).
+Slightly better at steps 3-5, worse from step 15 on. Mean speed 3.0 @20, 1.4
+@50, 1.0 @100 (v21: 3.3 / 3.2 / 3.4): energy still collapses, and faster than
+v21 late. Lookahead penetration features alone do not fix wall energy loss
+(the diagnosis expected the wall head to be needed for depth); v23 tests that.
