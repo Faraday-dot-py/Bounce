@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from model.token_dataset import BounceTokenSequenceDataset, load_dataset_samples
 from model.token_match import match_tokens_to_state
 from model.token_model import TokenModel
-from model.token_losses import boundary_loss, token_grid_loss, token_state_loss, window_collapse_loss
+from model.token_losses import boundary_loss, contact_mask, token_grid_loss, token_state_loss, window_collapse_loss
 
 
 def sampling_probability(epoch, ramp_epochs):
@@ -49,7 +49,7 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
                         boundary_weight=0.1, boundary_margin=0.0,
                         state_weight=1.0, grid_weight=0.1, state_vel_weight=0.1,
                         collapse_weight=0.0, collapse_floor=0.3, collapse_margin=1.0,
-                        free=False, max_steps=None, speed_weight=0.0):
+                        free=False, max_steps=None, speed_weight=0.0, contact_weight=1.0):
     """Teacher-forced/self-feed rollout loss for one sequence sample.
     Mirrors model.train.rollout_loss's per-step self-feed coin flip
     (re-drawn every step, not once per rollout, per
@@ -112,9 +112,13 @@ def token_rollout_loss(model, grid_seq, state_seq, horizon, sampling_p, weights,
             )
         target_grid = grid_seq[step + 2]
         target_state = state_seq[step + 2]
+        token_weights = None
+        if contact_weight != 1.0:
+            in_contact = contact_mask(state_seq[step + 1], target_state, match_idx)
+            token_weights = 1.0 + (contact_weight - 1.0) * in_contact.to(positions.dtype)
         total_loss = total_loss + state_weight * token_state_loss(
             positions, velocities, target_state, match_idx, vel_weight=state_vel_weight,
-            speed_weight=speed_weight,
+            speed_weight=speed_weight, token_weights=token_weights,
         )
         total_loss = total_loss + grid_weight_effective * token_grid_loss(
             pred_grid, target_grid, source_grid, weights,
@@ -229,6 +233,7 @@ def train_stepwise(args, model, opt, loader, weights):
                     state_weight=args.state_weight, grid_weight=args.grid_weight,
                     state_vel_weight=args.state_vel_weight,
                     free=True, max_steps=steps, speed_weight=args.speed_weight,
+                    contact_weight=args.contact_weight,
                 )
                 opt.zero_grad()
                 loss.backward()
@@ -328,6 +333,9 @@ def main():
     # that's supposed to teach the network to track velocity barely
     # penalizes getting it wrong.
     ap.add_argument("--state-vel-weight", type=float, default=0.1)
+    ap.add_argument("--contact-weight", type=float, default=1.0,
+                     help="multiplier on token_state_loss for tokens whose true nearest ball is within 1.6 "
+                          "at the previous or target step (stepwise curriculum only)")
     ap.add_argument("--speed-weight", type=float, default=0.0,
                      help="weight of the |v| magnitude term in token_state_loss (stepwise curriculum only)")
     # Weight token_grid_loss ramps to (from 0) over the same sampling_p

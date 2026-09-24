@@ -42,7 +42,20 @@ def token_grid_loss(pred_grid, target_grid, source_grid, weights, bg_weight=0.05
     )
 
 
-def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0.1, speed_weight=0.0):
+def contact_mask(prev_state, target_state, match_idx, threshold=1.6):
+    """(N,) bool: the token's ground-truth ball is within `threshold` of
+    another ball at the previous or the target step (2 * radius = 1.5 is where
+    the pair penalty force starts; the previous-step term flags the step
+    where contact begins mid-step). Uses the dataset's exact states."""
+    def near(state):
+        pos = torch.stack([state["x"], state["y"]], dim=1)
+        d = torch.cdist(pos, pos) + torch.eye(pos.shape[0], device=pos.device) * 1e6
+        return d.min(dim=1).values < threshold if pos.shape[0] > 1 else torch.zeros(pos.shape[0], dtype=torch.bool, device=pos.device)
+    return (near(prev_state) | near(target_state))[match_idx]
+
+
+def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0.1, speed_weight=0.0,
+                     token_weights=None):
     """Direct per-token MSE against the dataset's ground-truth ball state
     (model.token_dataset's state_seq entries), using the correspondence
     `match_idx` from model.token_match.match_tokens_to_state. Unlike
@@ -65,8 +78,11 @@ def token_state_loss(final_pos, final_vel, target_state, match_idx, vel_weight=0
         return final_pos.new_zeros(())
     target_pos = torch.stack([target_state["x"], target_state["y"]], dim=1)[match_idx]
     target_vel = torch.stack([target_state["vx"], target_state["vy"]], dim=1)[match_idx]
-    pos_loss = ((final_pos - target_pos) ** 2).mean()
-    vel_loss = ((final_vel - target_vel) ** 2).mean()
+    pos_sq = ((final_pos - target_pos) ** 2).sum(dim=-1) / 2
+    vel_sq = ((final_vel - target_vel) ** 2).sum(dim=-1) / 2
+    if token_weights is not None:
+        pos_sq, vel_sq = pos_sq * token_weights, vel_sq * token_weights
+    pos_loss, vel_loss = pos_sq.mean(), vel_sq.mean()
     loss = pos_loss + vel_weight * vel_loss
     if speed_weight > 0.0:
         speed_err = torch.sqrt((final_vel ** 2).sum(dim=-1) + 1e-8) - torch.sqrt((target_vel ** 2).sum(dim=-1) + 1e-8)

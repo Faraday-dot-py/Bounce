@@ -289,3 +289,26 @@ def test_token_state_loss_speed_weight_penalizes_shrunk_velocity_not_direction_o
     assert torch.isclose(with_s - base_s, torch.tensor((2.5 - 5.0) ** 2), atol=1e-3)
     rot = token_state_loss(pos, rotated, target, match_idx, vel_weight=0.0, speed_weight=1.0)
     assert torch.isclose(rot, torch.tensor(0.0), atol=1e-3)
+
+
+def test_contact_mask_flags_close_pairs_at_previous_or_target_step():
+    from model.token_losses import contact_mask
+    prev = {"x": torch.tensor([5.0, 5.9, 12.0]), "y": torch.tensor([5.0, 5.0, 3.0])}
+    target = {"x": torch.tensor([5.0, 8.0, 12.0]), "y": torch.tensor([5.0, 5.0, 3.0])}
+    mask = contact_mask(prev, target, torch.tensor([0, 1, 2]))
+    assert mask.tolist() == [True, True, False]
+    single = {"x": torch.tensor([1.0]), "y": torch.tensor([1.0])}
+    assert contact_mask(single, single, torch.tensor([0])).tolist() == [False]
+
+
+def test_token_state_loss_token_weights_scale_selected_tokens_only():
+    target = {"x": torch.tensor([1.0, 4.0]), "y": torch.tensor([1.0, 4.0]),
+              "vx": torch.zeros(2), "vy": torch.zeros(2)}
+    match_idx = torch.tensor([0, 1])
+    pos = torch.tensor([[2.0, 1.0], [4.0, 4.0]])
+    vel = torch.zeros(2, 2)
+    base = token_state_loss(pos, vel, target, match_idx)
+    weighted = token_state_loss(pos, vel, target, match_idx, token_weights=torch.tensor([3.0, 1.0]))
+    assert torch.isclose(weighted, base * 3.0)
+    unweighted = token_state_loss(pos, vel, target, match_idx, token_weights=torch.tensor([1.0, 1.0]))
+    assert torch.isclose(unweighted, base)

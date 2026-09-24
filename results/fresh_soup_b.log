@@ -1,0 +1,22 @@
+{
+  "checkpoint": "checkpoints/token_model_soup_b.pt",
+  "mode": "free",
+  "n": 20,
+  "num_balls": 4,
+  "num_seeds": 48,
+  "num_steps": 100,
+  "mean_position_error": {
+    "1": 0.07015859335660934,
+    "2": 0.07933201640844345,
+    "3": 0.09973718971014023,
+    "5": 0.14029429852962494,
+    "10": 0.4959140717983246,
+    "15": 1.4539884328842163,
+    "20": 2.3963232040405273,
+    "50": 6.445641040802002,
+    "100": 7.535594940185547
+  },
+  "identity_swaps": 140,
+  "token_count_mismatch_seeds": [],
+  "faded_token_fraction": 0.0
+}
