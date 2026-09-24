@@ -2231,3 +2231,14 @@ error at step (`results/eval_v18_short.json`, `eval_v19_short.json`):
 Read: the curriculum gives no improvement (slightly worse at 5-20). Step-1
 error is 0.43 for both, above the 0.25 init position error, so the floor is
 set by init-state error (velocity error 2.10), not by the training regime.
+
+Unbiased subagent frame review of v19 vs v18 (seeds 4738, 4739, steps 0-30,
+no hypothesis primed): both match ground truth to step ~4-8, then model
+blobs migrate to the lower part of the frame (the gravity/x-floor side) and
+stay there, clustering or fragmenting, while truth balls keep bouncing back
+through the upper half and the right/left edges. Neither model shows balls
+bouncing back up. v19's blobs lump more (seed 4739: packed into ~5 cells by
+step 15); v18 stays somewhat more spread; differences between them are small
+next to their common departure from truth. Consistent with the energy-loss
+finding: the dominant long-horizon defect is inelastic floor/wall contact.
+Grids: `videos/token_model_v19_diagnostic_grid_s473{8,9}.png`.
