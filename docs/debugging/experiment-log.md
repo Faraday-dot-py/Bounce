@@ -2427,3 +2427,30 @@ step 16); v21 shows more horizontal smearing along the bottom row (steps 8,
 30) and blobs stacked at the left edge (seed 4739, steps 16-20). One v24
 artifact: seed 4738 step 5 has the two centre balls merged into a dim 2x2
 smudge. Grids: scratchpad `g_v{21,24}_{4738,4739}.png`.
+
+### Energy audit of v24 (2026-09-24)
+
+Subagent audit (scratchpad `energy_*.py`, 48 seeds, 100 steps). v24 free
+rollout net dE -0.41 per token-step; free flight -0.72 (59% of the loss;
+-0.2 up to step 20, -1.1 for steps 21-40, -0.8 after), neighbor<3 -0.79,
+y-wall -0.69, x-floor +0.61 (a gain). Contact steps are roughly energy neutral
+through step 20 (predicted/true KE 0.89 pair, 1.08 wall) and overshoot after
+(1.27 / 1.50). Free-flight gravity: teacher-forced dvx 1.34 at steps 1-10
+and 1.25 at 11-20 (truth 1.35), collapsing to 0.37 (free) / -0.13 / -1.15
+(teacher-forced, steps 21-40 / 41-99) after step 20, with hidden-state
+magnitude growing from 0.04 (steps 1-5) to 0.46 (step 41+); with hidden
+zeroed each step gravity is exact, so there is no intrinsic drag or speed-
+dependent damping. Teacher-forced-with-hidden speed tracks truth (8.1 @50 vs
+7.2), free rollout does not (3.7): the collapse is exposure / off-
+distribution hidden state beyond the 20-step training unroll, not per-step
+error. Loss sensitivity: the state_vel_weight=0.1 velocity term is ~10% of
+the loss.
+
+Cheap fine-tune from v24 (scratchpad `energy_finetune.py`, 1500 batches at
+lr 3e-4): unroll 40 -> err@5/10/20 0.319 / 0.685 / 3.47 (v24 0.327 / 0.784 /
+4.27), speed@50/100 4.30 / 4.65 (v24 3.72 / 2.87); unroll 100 similar for
+error, worse speed@50. Analytic gravity base gave the best speed retention
+(speed@100 6.1 at unroll 100) but worse err@20; not pursued (hard-codes a
+simulator constant). Plan: v26 = all options + 40-step unrolls on an h44
+dataset (job 2886), v27 = v26 + `--speed-weight 0.1` (|v| magnitude loss,
+untested by the audit).
