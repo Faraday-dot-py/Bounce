@@ -203,7 +203,7 @@ class TokenModel(torch.nn.Module):
                                                   refine=self.position_refine)
             if pos1.shape[0] > 0:
                 hidden = torch.zeros((pos1.shape[0], self.dynamics.hidden_dim), dtype=dtype, device=device)
-                return pos1.to(dtype), split_velocities.to(dtype), hidden
+                return pos1.to(device=device, dtype=dtype), split_velocities.to(device=device, dtype=dtype), hidden
         if pos1.shape[0] == 0:
             return (pos1,
                     torch.zeros((0, 2), dtype=dtype, device=device),
