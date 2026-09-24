@@ -2,7 +2,7 @@
 // step, in the style of bbycroft.net/llm: every tensor is a grid of cells,
 // colour is the value (diverging, symmetric), height is |value|.
 
-const MAXE = 12;
+const MAXE = 8;
 const H = 32;
 
 const VS = `#version 300 es
@@ -77,8 +77,19 @@ const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a) => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const gamma = (x) => Math.sign(x) * Math.abs(x) ** 0.6;
 const ease = (t) => { t = Math.min(Math.max(t, 0), 1); return t * t * (3 - 2 * t); };
 
+const DESC = {
+  input: "node state = [velocity, wall proximity, penetration now, penetration after dt, hidden]",
+  q: "query = Wq . input", score: "q . k / sqrt(32)", weight: "softmax over the ball's edges (global-max shifted)",
+  K: "key per edge = Wk . [neighbour node state, relative position]", V: "value per edge",
+  attn: "sum over edges of weight * V", hprev: "hidden state from previous tick",
+  r: "GRU reset gate (centred at 0.5)", zg: "GRU update gate (centred at 0.5)", ng: "GRU candidate", hnew: "new hidden = (1-z)*n + z*h",
+  delta: "delta head on new hidden: [dp x, dp y, dv x, dv y]", wallh: "wall head hidden layer on [velocity, wall features]",
+  wallo: "wall head output [dp | dv]", pcoef: "pair MLP output per neighbour (alpha, beta for dp, then dv)",
+  pforce: "pair impulse on this ball per neighbour [dp | dv]", psum: "sum of pair impulses", final: "delta + wall + pair: dp then dv",
+};
 const STAGE = { input: 0, qkv: 0.12, attn: 0.25, agg: 0.42, gru: 0.55, head: 0.72, final: 0.9 };
 
 export class Viz3D {
@@ -127,30 +138,30 @@ export class Viz3D {
       tr.edgesShown.forEach((ed, i) => { const v = field(ed); for (let c = 0; c < cols; c++) out[i * cols + c] = v[c]; });
       return out;
     };
-    add("input", "input node state", 0, 0, 1, 46,
+    add("input", "input", 0, 0, 1, 46,
       { key: "input", stage: STAGE.input, groups: [2, 6, 10, 14], get: (t) => t.ns,
         segs: [[0, "vel"], [2, "wall"], [6, "pen"], [10, "pen+dt"], [14, "h(t-1)"]] });
-    add("q", "q = Wq . input", 0, 5, 1, H, { key: "qkv", stage: STAGE.qkv, get: (t) => t.q });
-    add("score", "score", -6, 9, MAXE, 1, { ldz: -1.4, key: "score", stage: STAGE.attn, get: flatEdges((x) => [x.score], 1),
+    add("q", "q", 0, 4, 1, H, { key: "qkv", stage: STAGE.qkv, get: (t) => t.q });
+    add("score", "score", -6, 8, MAXE, 1, { ldz: -1.4, key: "score", stage: STAGE.attn, get: flatEdges((x) => [x.score], 1),
       rowLabels: true });
-    add("weight", "softmax", -3, 9, MAXE, 1, { ldz: -2.6, key: "weight", stage: STAGE.attn + 0.05, get: flatEdges((x) => [x.weight], 1) });
-    add("K", "K per edge (rows: neighbours + self)", 0, 9, MAXE, H, { key: "qkv", stage: STAGE.qkv + 0.04, get: flatEdges((x) => x.k, H) });
-    add("V", "V per edge", 38, 9, MAXE, H, { key: "qkv", stage: STAGE.attn + 0.05, get: flatEdges((x) => x.v, H) });
-    add("attn", "attention output = sum(weight * V)", 0, 24, 1, H, { key: "agg", stage: STAGE.agg, get: (t) => t.attnOut });
-    add("hprev", "h(t-1)", 38, 24, 1, H, { key: "input", stage: STAGE.input, get: (t) => t.ns.subarray(14) });
-    add("r", "GRU reset gate r", 0, 28, 1, H, { key: "gate", stage: STAGE.gru, center: 0.5, get: (t) => t.r });
-    add("zg", "GRU update gate z", 0, 31, 1, H, { key: "gate", stage: STAGE.gru + 0.03, center: 0.5, get: (t) => t.z });
-    add("ng", "GRU candidate n", 0, 34, 1, H, { key: "gru", stage: STAGE.gru + 0.06, get: (t) => t.n });
-    add("hnew", "h(t) = (1-z)*n + z*h(t-1)", 0, 38, 1, H, { key: "gru", stage: STAGE.gru + 0.1, get: (t) => t.hNew });
-    add("delta", "delta head", 0, 43, 1, 4, { key: "head", stage: STAGE.head, groups: [2], get: (t) => t.deltaHead });
-    add("wallh", "wall head hidden", 0, 47, 1, H, { key: "head", stage: STAGE.head, get: (t) => t.wallHidden });
-    add("wallo", "wall head out", 24, 43, 1, 4, { key: "head", stage: STAGE.head + 0.04, groups: [2], get: (t) => t.wallOut });
-    add("pcoef", "pair MLP coef", 0, 51, MAXE, 4,
+    add("weight", "attn weight", -3, 8, MAXE, 1, { ldz: -2.6, key: "weight", stage: STAGE.attn + 0.05, get: flatEdges((x) => [x.weight], 1) });
+    add("K", "K (row per edge)", 0, 8, MAXE, H, { key: "qkv", stage: STAGE.qkv + 0.04, get: flatEdges((x) => x.k, H) });
+    add("V", "V", 38, 8, MAXE, H, { key: "qkv", stage: STAGE.attn + 0.05, get: flatEdges((x) => x.v, H) });
+    add("attn", "attn out", 0, 19, 1, H, { key: "agg", stage: STAGE.agg, get: (t) => t.attnOut });
+    add("hprev", "h(t-1)", 38, 19, 1, H, { key: "input", stage: STAGE.input, get: (t) => t.ns.subarray(14) });
+    add("r", "gate r", 0, 22, 1, H, { key: "gate", stage: STAGE.gru, center: 0.5, get: (t) => t.r });
+    add("zg", "gate z", 0, 25, 1, H, { key: "gate", stage: STAGE.gru + 0.03, center: 0.5, get: (t) => t.z });
+    add("ng", "cand n", 0, 28, 1, H, { key: "gru", stage: STAGE.gru + 0.06, get: (t) => t.n });
+    add("hnew", "h(t)", 0, 31, 1, H, { key: "gru", stage: STAGE.gru + 0.1, get: (t) => t.hNew });
+    add("delta", "delta", 0, 35, 1, 4, { key: "head", stage: STAGE.head, groups: [2], get: (t) => t.deltaHead });
+    add("wallh", "wall hid", 0, 38, 1, H, { key: "head", stage: STAGE.head, get: (t) => t.wallHidden });
+    add("wallo", "wall out", 20, 35, 1, 4, { key: "head", stage: STAGE.head + 0.04, groups: [2], get: (t) => t.wallOut });
+    add("pcoef", "pair coef", 0, 41, MAXE, 4,
       { key: "head", stage: STAGE.head + 0.02, get: flatEdges((x) => (x.pair ? x.pair.coef : [NaN, NaN, NaN, NaN]), 4) });
-    add("pforce", "pair impulse", 12, 51, MAXE, 4, { key: "head", stage: STAGE.head + 0.06, groups: [2],
+    add("pforce", "pair dp|dv", 12, 41, MAXE, 4, { key: "head", stage: STAGE.head + 0.06, groups: [2],
       get: flatEdges((x) => (x.pair ? [...x.pair.dp, ...x.pair.dv] : [NaN, NaN, NaN, NaN]), 4) });
-    add("psum", "pair sum", 48, 43, 1, 4, { key: "head", stage: STAGE.head + 0.1, groups: [2], get: (t) => t.pairSum });
-    add("final", "final = delta + wall + pair", 0, 66, 1, 4, { key: "final", stage: STAGE.final, groups: [2], get: (t) => t.delta });
+    add("psum", "pair sum", 40, 35, 1, 4, { key: "head", stage: STAGE.head + 0.1, groups: [2], get: (t) => t.pairSum });
+    add("final", "final dp|dv", 0, 52, 1, 4, { key: "final", stage: STAGE.final, groups: [2], get: (t) => t.delta });
 
     // static weight tiles
     const W = this.weights.w;
@@ -158,7 +169,7 @@ export class Viz3D {
       ["gru.weight_ih", "GRU W_ih (r|z|n)", 96, 32], ["gru.weight_hh", "GRU W_hh (r|z|n)", 96, 32],
       ["delta_head.weight", "delta head", 4, 32], ["wall_head.0.weight", "wall head 1", 32, 14], ["wall_head.2.weight", "wall head 2", 4, 32],
       ["pair_head.0.weight", "pair MLP 1", 32, 5], ["pair_head.2.weight", "pair MLP 2", 32, 32], ["pair_head.4.weight", "pair MLP 3", 4, 32]];
-    let cx = 0, cz = 75, rowH = 0;
+    let cx = 0, cz = 60, rowH = 0;
     this.weightTiles = [];
     for (const [key, label, rows, cols] of mats) {
       if (cx + cols > 110) { cx = 0; cz += rowH + 3; rowH = 0; }
@@ -178,7 +189,7 @@ export class Viz3D {
     this.raw = new Float32Array(this.nInst);
     for (const t of this.weightTiles) {
       const arr = t.get();
-      for (let i = 0; i < arr.length; i++) { this.cur[t.start + i] = arr[i] / t.scale; this.prev[t.start + i] = this.cur[t.start + i]; this.next[t.start + i] = this.cur[t.start + i]; this.raw[t.start + i] = arr[i]; }
+      for (let i = 0; i < arr.length; i++) { this.cur[t.start + i] = gamma(arr[i] / t.scale); this.prev[t.start + i] = this.cur[t.start + i]; this.next[t.start + i] = this.cur[t.start + i]; this.raw[t.start + i] = arr[i]; }
     }
   }
 
@@ -258,7 +269,7 @@ export class Viz3D {
       const s = this.scales[t.key];
       for (let i = 0; i < t.vals.length; i++) {
         const v = t.vals[i];
-        this.next[t.start + i] = Number.isNaN(v) ? 2 : Math.min(Math.max((v - t.center) / s, -1), 1);
+        this.next[t.start + i] = Number.isNaN(v) ? 2 : gamma(Math.min(Math.max((v - t.center) / s, -1), 1));
         this.raw[t.start + i] = v;
       }
     }
@@ -274,7 +285,7 @@ export class Viz3D {
     const c = this.canvas;
     let drag = null;
     const pts = new Map();
-    c.addEventListener("pointerdown", (e) => { c.setPointerCapture(e.pointerId); pts.set(e.pointerId, e); drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, d: this.pinchDist(pts) }; });
+    c.addEventListener("pointerdown", (e) => { const rc = c.getBoundingClientRect(); this.mouse = [e.clientX - rc.left, e.clientY - rc.top]; c.setPointerCapture(e.pointerId); pts.set(e.pointerId, e); drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey, d: this.pinchDist(pts) }; });
     c.addEventListener("pointerup", (e) => { pts.delete(e.pointerId); drag = null; });
     c.addEventListener("pointercancel", (e) => { pts.delete(e.pointerId); drag = null; });
     c.addEventListener("pointermove", (e) => {
@@ -284,10 +295,12 @@ export class Viz3D {
       pts.set(e.pointerId, e);
       if (pts.size === 2) {
         const d = this.pinchDist(pts);
+        this.userMoved = true;
         if (drag.d) this.dist = Math.min(Math.max(this.dist * drag.d / d, 8), 400);
         drag.d = d;
         return;
       }
+      this.userMoved = true;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       drag.x = e.clientX; drag.y = e.clientY;
       if (drag.pan) {
@@ -301,7 +314,7 @@ export class Viz3D {
       }
     });
     c.addEventListener("pointerleave", () => { this.mouse = null; });
-    c.addEventListener("wheel", (e) => { e.preventDefault(); this.dist = Math.min(Math.max(this.dist * Math.exp(e.deltaY * 0.001), 8), 400); }, { passive: false });
+    c.addEventListener("wheel", (e) => { e.preventDefault(); this.userMoved = true; this.dist = Math.min(Math.max(this.dist * Math.exp(e.deltaY * 0.001), 8), 400); }, { passive: false });
     c.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
@@ -312,10 +325,13 @@ export class Viz3D {
   }
 
   resetCamera() {
-    this.yaw = 0; this.pitch = 1.0;
     const aspect = this.canvas.clientWidth / Math.max(this.canvas.clientHeight, 1);
-    this.dist = Math.max(52 / (Math.tan(0.35) * aspect), 38 / Math.tan(0.35)) * 0.95;
-    this.target = [33, 0, 34];
+    this.fitAspect = aspect;
+    this.userMoved = false;
+    this.yaw = 0; this.pitch = aspect < 1 ? 1.3 : 1.0;
+    const half = aspect < 1 ? 36 : 46;
+    this.dist = Math.max(half / (Math.tan(0.35) * aspect), 31 / Math.tan(0.35)) * 0.95;
+    this.target = [aspect < 1 ? 20 : 32, 0, 27];
   }
 
   matrix() {
@@ -334,7 +350,8 @@ export class Viz3D {
 
   frame(now) {
     const canvas = this.canvas;
-    if (!this.canvasReady && canvas.clientWidth > 0) { this.resetCamera(); this.canvasReady = true; }
+    const aspectNow = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+    if (canvas.clientWidth > 0 && (!this.canvasReady || (!this.userMoved && Math.abs(aspectNow - this.fitAspect) > 0.02))) { this.resetCamera(); this.canvasReady = true; }
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; this.overlay.width = w; this.overlay.height = h; }
@@ -379,37 +396,34 @@ export class Viz3D {
     }
     if (this.showLabels) {
       ctx.font = "11px ui-monospace, Menlo, monospace";
-      ctx.textBaseline = "bottom";
       ctx.textAlign = "left";
+      const placed = [];
+      const put = (txt, p, color, below = false) => {
+        if (!p) return;
+        const w = ctx.measureText(txt).width;
+        const y0 = below ? p[1] : p[1] - 13;
+        if (p[0] + w < 0 || p[0] > this.canvas.clientWidth) return;
+        for (const r of placed) if (p[0] < r[2] && p[0] + w > r[0] && y0 < r[3] && y0 + 12 > r[1]) return;
+        placed.push([p[0], y0, p[0] + w, y0 + 12]);
+        ctx.fillStyle = color;
+        ctx.textBaseline = "top";
+        ctx.fillText(txt, p[0], y0);
+      };
       for (const t of this.tensors) {
         if (t.kind && !this.showWeights) continue;
-        const p = this.project(m, t.x, 0, t.z - 0.2 + t.ldz);
-        if (!p) continue;
-        ctx.fillStyle = t.kind ? "rgba(150,160,180,0.75)" : "rgba(225,230,240,0.95)";
-        ctx.fillText(t.label, p[0], p[1] - 2);
-        if (t.segs) {
-          ctx.fillStyle = "rgba(170,180,200,0.85)";
-          ctx.textBaseline = "top";
-          for (const [c, txt] of t.segs) {
-            const q = this.project(m, t.x + c + 0.7 * t.groups.filter((g) => c >= g).length, 0, t.z + 1.1);
-            if (q) ctx.fillText(txt, q[0], q[1]);
-          }
-          ctx.textBaseline = "bottom";
+        put(t.label, this.project(m, t.x, 0, t.z - 0.2 + t.ldz), t.kind ? "rgba(150,160,180,0.75)" : "rgba(225,230,240,0.95)");
+      }
+      for (const t of this.tensors) {
+        if (!t.segs) continue;
+        for (const [c, txt] of t.segs) {
+          put(txt, this.project(m, t.x + c + 0.7 * t.groups.filter((g) => c >= g).length, 0, t.z + 1.1), "rgba(170,180,200,0.85)", true);
         }
       }
       if (this.trace && this.trace.edgesShown) {
-        ctx.fillStyle = "rgba(190,200,215,0.9)";
-        const p0 = this.project(m, -15, 0, 9.8), p1 = this.project(m, -15, 0, 10.8);
-        if (p0 && p1 && p1[1] - p0[1] >= 11) {
-          this.trace.edgesShown.forEach((ed, i) => {
-            const p = this.project(m, -15, 0, 9 + i + 0.8);
-            if (p) ctx.fillText(ed.self ? "self" : "ball " + (ed.srcId ?? ed.src), p[0], p[1]);
-          });
-        }
-        if (this.trace.edgesHidden > 0) {
-          const p = this.project(m, 0, 0, 9 + MAXE + 0.6);
-          if (p) ctx.fillText(`+${this.trace.edgesHidden} more neighbours not shown`, p[0], p[1]);
-        }
+        this.trace.edgesShown.forEach((ed, i) => {
+          put(ed.self ? "self" : "ball " + (ed.srcId ?? ed.src), this.project(m, -12, 0, 8 + i + 0.9), "rgba(190,200,215,0.9)", true);
+        });
+        if (this.trace.edgesHidden > 0) put(`+${this.trace.edgesHidden} more neighbours not shown`, this.project(m, 0, 0, 8 + MAXE + 0.6), "rgba(190,200,215,0.9)");
       }
     }
     if (this.mouse && this.trace) {
@@ -444,7 +458,7 @@ export class Viz3D {
     }
     if (best === null) return null;
     const t = this.tensors[this.inst.tensor[best]];
-    return { label: t.name, r: this.inst.r[best], c: this.inst.c[best], value: this.raw[best] };
+    return { label: t.name + (DESC[t.name] ? " (" + DESC[t.name] + ")" : ""), r: this.inst.r[best], c: this.inst.c[best], value: this.raw[best] };
   }
 
   legendScales() { return this.scales; }

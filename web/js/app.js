@@ -25,6 +25,7 @@ const gt = new Physics(cfg.n, { dt: cfg.dt, gravity: cfg.gravity, radius: cfg.ra
 const gtIds = [];
 const arena = $("arena"), gtCanvas = $("gt");
 const viz = new Viz3D($("gl"), $("ov"), weights);
+if (window.innerWidth < 700) { viz.showWeights = false; $("wbtn").setAttribute("aria-pressed", "false"); }
 
 const state = {
   paused: false, tps: 30, held: false, cursor: [0, 0], selected: -1, edges: 0, gtOn: false,
@@ -232,7 +233,7 @@ function energyGT() {
 }
 
 function updateStats() {
-  const rows = [["balls", sim.count], ["tick", sim.ticks], ["model step", `${state.stepMs.toFixed(2)} ms`], ["ticks/s", state.measured.toFixed(1)]];
+  const rows = [["balls", sim.count], ["tick", sim.ticks], ["model step", `${state.stepMs.toFixed(2)} ms`], ["ticks/s", state.paused ? "paused" : state.measured.toFixed(1)]];
   const i = sim.indexOf(state.selected);
   if (i >= 0) {
     const tr = state.trace;
@@ -300,6 +301,7 @@ function setGT(on) {
   toggle("gtbtn", on);
   $("gtWrap").hidden = !on;
   $("arenas").classList.toggle("two", on);
+  $("main").classList.toggle("gt", on);
   if (on) seedGT();
 }
 
@@ -324,6 +326,7 @@ $("edges").onclick = () => setEdges((state.edges + 1) % 3);
 $("gtbtn").onclick = () => setGT(!state.gtOn);
 $("wbtn").onclick = () => { viz.showWeights = !viz.showWeights; toggle("wbtn", viz.showWeights); };
 $("lbtn").onclick = () => { viz.showLabels = !viz.showLabels; toggle("lbtn", viz.showLabels); };
+if (window.matchMedia("(pointer: coarse)").matches) $("hint").textContent = "drag to orbit, pinch to zoom, tap cells for values";
 $("cam").onclick = () => viz.resetCamera();
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.ctrlKey || e.metaKey) return;

@@ -14,10 +14,13 @@ html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 
 body { padding: 10px 16px 24px; max-width: 1500px; margin: 0 auto; }
 h1 { font-size: 17px; margin: 4px 0 2px; font-weight: 600; }
 .sub { color: var(--dim); margin: 0 0 10px; font-size: 13px; }
+main.gt { grid-template-columns: minmax(300px, 680px) 1fr; }
 main { display: grid; grid-template-columns: minmax(300px, 440px) 1fr; gap: 12px; align-items: start; }
 .left { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .arenas { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .arenas.two { grid-template-columns: 1fr 1fr; }
+.ballkey { font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+.ballkey .bar { width: 120px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, rgb(91,141,239), rgb(127,209,185) 20%, rgb(242,227,148) 48%, rgb(255,157,92)); }
 .arena { position: relative; min-width: 0; }
 .arena canvas { width: 100%; aspect-ratio: 1; display: block; background: #000; border: 1px solid var(--line); border-radius: 4px; touch-action: none; cursor: crosshair; }
 .arena .tag { position: absolute; left: 6px; top: 4px; font-size: 11px; color: var(--dim); pointer-events: none; }
@@ -34,13 +37,15 @@ input[type=range] { width: 120px; }
 .viz { position: relative; height: min(78vh, 900px); min-height: 380px; background: #0d0f14; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .viz canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .viz canvas.ov { pointer-events: none; }
-.legend { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; pointer-events: none; flex-wrap: wrap; }
+.legend { position: absolute; left: 10px; top: 8px; font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; pointer-events: none; flex-wrap: wrap; }
 .legend .bar { width: 140px; height: 10px; border-radius: 2px; background: linear-gradient(90deg, #b8e0ff, #3880ec 30%, #22262f 50%, #ed8014 70%, #ffe080); border: 1px solid #333; }
-.hint { position: absolute; right: 10px; top: 8px; font-size: 11px; color: var(--dim); text-align: right; pointer-events: none; }
+.hint { position: absolute; right: 10px; bottom: 8px; font-size: 11px; color: var(--dim); text-align: right; pointer-events: none; }
 footer { margin-top: 14px; color: var(--dim); font-size: 12px; max-width: 900px; }
 kbd { background: #202636; border: 1px solid #333c52; border-radius: 3px; padding: 0 4px; font-size: 11px; }
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
+  main, main.gt { grid-template-columns: 1fr; }
+  .arenas.two { grid-template-columns: 1fr; }
+  button { padding: 6px 8px; }
   .viz { height: 70vh; }
   input[type=range] { width: 90px; }
 }
@@ -49,12 +54,13 @@ kbd { background: #202636; border: 1px solid #333c52; border-radius: 3px; paddin
 <body>
 <h1>Bounce token model, live in the browser</h1>
 <p class="sub">A 13k-parameter learned emulator (one token per ball: radius-graph attention, GRU, wall head, pair-impulse head) stepping a 100x100 arena. Inference is plain JavaScript. Cubes are the network's activations for the selected ball.</p>
-<main>
+<main id="main">
   <div class="left">
     <div class="arenas" id="arenas">
       <div class="arena"><canvas id="arena" width="600" height="600" aria-label="model arena"></canvas><span class="tag">token model</span></div>
       <div class="arena" id="gtWrap" hidden><canvas id="gt" width="600" height="600" aria-label="ground truth arena"></canvas><span class="tag">ground truth (bounce.py port)</span></div>
     </div>
+    <div class="ballkey"><span>ball colour = speed</span><span>0</span><span class="bar"></span><span>25+ cells/s</span></div>
     <div class="panel">
       <div class="row">
         <button id="pause" aria-pressed="false" title="space">Pause</button>
@@ -79,9 +85,8 @@ kbd { background: #202636; border: 1px solid #333c52; border-radius: 3px; paddin
   <div>
     <div class="viz" id="viz">
       <canvas id="gl"></canvas><canvas id="ov" class="ov"></canvas>
-      <div class="legend"><span>negative</span><span class="bar"></span><span>positive</span></div>
-      <div class="hint">drag orbit, shift/right-drag pan, wheel zoom, hover for values</div>
-    </div>
+      <div class="legend"><span>negative</span><span class="bar"></span><span>positive</span><span>(brightness ~ |value|^0.6 of group max)</span><span id="hint">drag orbit, shift/right-drag pan, wheel zoom, hover for values</span></div>
+          </div>
   </div>
 </main>
 <footer>
