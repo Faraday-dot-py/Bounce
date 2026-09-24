@@ -2712,3 +2712,48 @@ Error grows with ball count (more collisions, so faster chaotic
 amplification) but v33 beats v18 at every count, most strongly at 5-10 steps
 (-83% / -70% at 6 balls at steps 5 / 10) and less at step 20 (-24% at 6
 balls).
+
+### Checkpoint soups and a third seed set (2026-09-24)
+
+`scripts/make_checkpoint_soup.py` averages same-architecture state_dicts.
+Soup A = mean(v33, v35, v36, v37) (siblings continued from v33); soup B =
+mean(v30, v31, v33, v34, v36, v37) (the fine-tune lineage). Neither was
+chosen on any evaluation seed set beyond trying these two. Position error at
+step 1/2/3/5/10/15/20/50/100 (`results/soup_*`, `results/fresh_*`):
+
+Standard seeds (4738+):
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| soup A | 0.089 | 0.099 | 0.122 | 0.176 | 0.568 | 1.616 | 2.789 | 7.16 | 7.81 |
+| soup B | 0.090 | 0.099 | 0.121 | 0.172 | 0.561 | 1.544 | 2.595 | 6.85 | 8.09 |
+
+Held-out seeds (9000+):
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| soup A | 0.094 | 0.107 | 0.124 | 0.162 | 0.441 | 1.512 | 2.823 | 6.92 | 7.61 |
+| soup B | 0.094 | 0.106 | 0.122 | 0.161 | 0.432 | 1.448 | 2.608 | 7.35 | 7.63 |
+
+Fresh seeds (12000+, evaluated only after choosing soup B):
+| | 1 | 2 | 3 | 5 | 10 | 15 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|---|---|
+| v18 | 0.428 | 0.610 | 0.787 | 1.127 | 1.956 | 3.426 | 4.744 | 7.29 | 7.30 |
+| v25 | 0.104 | 0.122 | 0.150 | 0.213 | 0.650 | 1.776 | 2.957 | 7.32 | 8.42 |
+| v30 | 0.095 | 0.102 | 0.121 | 0.154 | 0.506 | 1.609 | 2.574 | 7.01 | 8.08 |
+| v31 | 0.072 | 0.083 | 0.105 | 0.150 | 0.554 | 1.509 | 2.585 | 6.79 | 7.93 |
+| v33 | 0.070 | 0.077 | 0.095 | 0.135 | 0.489 | 1.522 | 2.543 | 6.86 | 8.47 |
+| soup B | 0.070 | 0.079 | 0.100 | 0.140 | 0.496 | 1.454 | 2.396 | 6.45 | 7.54 |
+
+Soup B is at or near the best on all three seed sets (step 20: 2.595 / 2.608 /
+2.396; v33: 2.559 / 2.945 / 2.543), so averaging the fine-tune lineage
+removes most of the checkpoint-to-checkpoint noise seen among v30-v37.
+Soup B is the recommended headline model (needs `--ball-split`
+`--velocity-readout --position-refine --wall-lookahead --wall-head
+--pair-impulse`); versus v18 on the three seed sets: step 5 -86 / -86 / -88%,
+step 10 -71 / -77 / -75%, step 20 -47 / -47 / -49% (v18 standard seeds
+1.176 / 2.038 / 5.073). Initial-state vs dynamics decomposition (subagent,
+scratchpad `decomp_*.py`): with exact ground-truth initial state, v33's
+step-5 error halves (0.168 -> 0.084) but step-10 falls only 21-27% (0.578 ->
+0.457, 0.456 -> 0.333) and step 20 is unchanged (2.61 vs 2.56); the true
+simulator started from the model's own init reaches 2.1-2.3 at step 20, so
+step 20 is within ~0.3-0.6 of the chaos floor; remaining step 5-15 error is
+mostly dynamics.
