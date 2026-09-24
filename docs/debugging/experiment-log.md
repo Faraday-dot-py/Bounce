@@ -2478,3 +2478,16 @@ is at about eps 0.07-0.1 and at step 20 slightly worse than eps=0.1
 (chaos-limited). Mean speed 4.7 @20, 3.6 @50, 2.2 @100 (truth 6.0 / 6.9 /
 7.9): energy retention still incomplete (v26/v27 target it with 40-step
 unrolls). Training-stage losses were much lower than v24 (stage 14 ~3.6).
+
+Unbiased subagent frame review of v25 (seeds 4738-4740, steps 0-30, no
+hypothesis primed): model and truth nearly identical through step 3 on all
+seeds (four distinct blobs, matching positions/brightness/elongation);
+balls reach the bottom rows around steps 5-12 and move back up by steps
+16-20 in both, no model ball stuck on the floor (contrast the v18/v19
+review); no fade to blank frames, ball count stays 4-5, no smear, no
+consistent drift in one direction; the departure is gradual divergence
+between steps 8 and 16 (seed 4740 tracks best, to step ~12-16; 4738 and 4739
+lose identity by step 20). Artifacts: seed 4738 step 16 shows 3 blobs with a
+wide dim bottom blob, step 20 two bright balls side by side at the bottom
+that truth lacks; seed 4739 steps 8-16 dim blue clusters where truth has
+bright blobs, 4-5 blobs at step 16. Grids: scratchpad `g_v25_{4738,4739,4740}.png`.
