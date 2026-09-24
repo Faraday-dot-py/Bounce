@@ -2269,3 +2269,29 @@ checkpoints (48 seeds, position error at step):
 
 The checkpoints were trained with noisy init velocity, so this is a lower
 bound. v21 (job below) retrains the v19 curriculum with readout.
+
+### Wall-contact diagnosis and wall features (2026-09-24)
+
+Subagent diagnosis (scratchpad `truth.py`, `model_probe.py`, `fit_features.py`,
+`fit_shallow.py`). True walls: contact starts at penetration > 0 (x > 18.25
+or < 0.75), stiff and near-elastic; the reversal takes 1-2 steps (dvx -7 to
+-22 for entry speed 4-10, ~ -2*v_in), median |v_out|/|v_in| 1.014 over 2125
+floor bounces; free flight has dvx = +1.35 exactly. v18 single-ball probes:
+at y walls it starts braking ~2 cells before contact (start y=2, vy=-4: model
+vy -1.2, -0.8, -0.8, creeping to +0.3 by step 6; truth +4 rebound at step
+4); at the x floor it reverses but returns less speed and its incoming peak
+speed is capped ~6.5 (truth 7.3-9.6). Energy change (0.5v^2 - 9x) from start
+over 200 random starts: step 10 truth -5.6 / model -27.6; step 20 -0.2 /
+-16.0; step 40 -3.8 / -33.1. One-step R^2 on 20k wall-contact states: dvx
+0.51, dvy 0.41.
+
+Representability: a 2x32 MLP on [v, current 4 wall features] fits one-step
+truth at R^2 1.000/0.999, so the current features suffice in principle; the
+linear->GRU->linear path is the bottleneck. A matched shallow net: current
+features MAE dvx 0.24 / dvy 0.30; + penetration 0.15 / 0.26; + lookahead
+penetration relu(R - d(x + v*dt)) 0.09 / 0.08. An analytic reflection base
+was worse (impulse timing). Implemented as opt-in `--wall-lookahead`
+(8 extra node features) and `--wall-head` (separate two-layer wall-impulse
+head outside the GRU, zero-init); v22 = readout + lookahead, v23 = v22 +
+head. Caveat from the subagent: one-step fits do not separate depth from
+training compounding.

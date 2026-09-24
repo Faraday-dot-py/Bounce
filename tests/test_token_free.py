@@ -85,3 +85,38 @@ def test_mirror_sym_is_y_reflection_equivariant():
 def test_mirror_sym_hidden_is_twice_core_and_default_unchanged():
     assert TokenFreeDynamics(n=20, hidden_dim=8, mirror_sym=True).hidden_dim == 16
     assert TokenFreeDynamics(n=20, hidden_dim=8).hidden_dim == 8
+
+
+def test_wall_contact_features_penetration_and_lookahead():
+    from model.token_free import wall_contact_features
+    n, R, dt = 20, 0.75, 0.15
+    pos = torch.tensor([[10.0, 10.0], [18.5, 10.0], [17.9, 10.0]])
+    vel = torch.tensor([[0.0, 0.0], [0.0, 0.0], [4.0, 0.0]])
+    f = wall_contact_features(pos, vel, n, R, dt)
+    assert f.shape == (3, 8)
+    assert torch.all(f[0] == 0)
+    assert torch.isclose(f[1, 1], torch.tensor((0.75 - 0.5) / 0.75))
+    assert f[2, 1] == 0.0 and f[2, 5] > 0.0
+
+
+def test_wall_options_zero_init_identity_and_mirror_equivariant():
+    torch.manual_seed(4738)
+    n = 20
+    dyn = TokenFreeDynamics(n=n, mirror_sym=True, wall_lookahead=True, wall_head=True)
+    pos = torch.tensor([[18.6, 2.0], [6.0, 17.9], [12.0, 9.0]])
+    vel = torch.randn(3, 2)
+    hidden = torch.zeros(3, dyn.hidden_dim)
+    dp, dv, _ = dyn(pos, vel, hidden)
+    assert torch.all(dp == 0) and torch.all(dv == 0)
+    for m in (dyn.delta_head, dyn.wall_head[0], dyn.wall_head[2]):
+        torch.nn.init.normal_(m.weight, std=0.2)
+        torch.nn.init.normal_(m.bias, std=0.1)
+    hidden = torch.randn(3, dyn.hidden_dim)
+    mirrored_pos = torch.stack([pos[:, 0], (n - 1) - pos[:, 1]], dim=1)
+    mirrored_vel = vel * torch.tensor([1.0, -1.0])
+    swapped = torch.cat([hidden[:, dyn.core_dim:], hidden[:, :dyn.core_dim]], dim=-1)
+    a = dyn(pos, vel, hidden)
+    b = dyn(mirrored_pos, mirrored_vel, swapped)
+    flip = torch.tensor([1.0, -1.0])
+    assert torch.allclose(b[0], a[0] * flip, atol=1e-5)
+    assert torch.allclose(b[1], a[1] * flip, atol=1e-5)

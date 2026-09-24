@@ -14,20 +14,39 @@ def wall_features(positions, n, wall_range):
     return (wall_range - d.clamp(0.0, wall_range)) / wall_range
 
 
+def wall_contact_features(positions, velocities, n, radius, dt):
+    """(N, 8): penetration depth into each wall now, then after one
+    free-flight step (`pos + vel * dt`), as relu(radius - distance) / radius.
+    Contact -- the stiff, near-elastic wall impulse in bounce.py -- starts
+    at penetration > 0, and whether a step is an impulse step depends on
+    where the ball will be, so the lookahead half tells the network that
+    before it happens."""
+    def penetration(pos):
+        x, y = pos[:, 0], pos[:, 1]
+        d = torch.stack([x, (n - 1) - x, y, (n - 1) - y], dim=1)
+        return (radius - d).clamp(min=0.0) / radius
+    return torch.cat([penetration(positions), penetration(positions + velocities * dt)], dim=1)
+
+
 class TokenFreeDynamics(nn.Module):
     """TokenDynamics (radius-graph attention + GRU + zero-init delta head)
     with wall-proximity node features -- see
     docs/superpowers/specs/2026-09-23-token-free-rollout-design.md."""
 
-    def __init__(self, n, hidden_dim=32, neighbor_radius=4.0, wall_range=3.0, mirror_sym=False):
+    def __init__(self, n, hidden_dim=32, neighbor_radius=4.0, wall_range=3.0, mirror_sym=False,
+                 wall_lookahead=False, wall_head=False, radius=0.75, dt=0.15):
         super().__init__()
         self.n = n
+        self.radius = radius
+        self.dt = dt
+        self.wall_lookahead = wall_lookahead
         self.core_dim = hidden_dim
         self.mirror_sym = mirror_sym
         self.hidden_dim = hidden_dim * (2 if mirror_sym else 1)
         self.neighbor_radius = neighbor_radius
         self.wall_range = wall_range
-        node_dim = 2 + 4 + self.core_dim
+        wall_dim = 4 + (8 if wall_lookahead else 0)
+        node_dim = 2 + wall_dim + self.core_dim
         edge_dim = 2
         self.query = nn.Linear(node_dim, self.core_dim)
         self.key = nn.Linear(node_dim + edge_dim, self.core_dim)
@@ -36,6 +55,17 @@ class TokenFreeDynamics(nn.Module):
         self.delta_head = nn.Linear(self.core_dim, 4)
         nn.init.zeros_(self.delta_head.weight)
         nn.init.zeros_(self.delta_head.bias)
+        self.wall_head = None
+        if wall_head:
+            # Separate two-layer path from (velocity, wall features) to the
+            # delta, outside the GRU: the wall impulse is a sharp function
+            # of position and velocity that the linear->GRU->linear path
+            # only expresses as a smooth brake (see docs/debugging/
+            # experiment-log.md, wall-bounce diagnosis).
+            self.wall_head = nn.Sequential(nn.Linear(2 + wall_dim, self.core_dim), nn.ReLU(),
+                                           nn.Linear(self.core_dim, 4))
+            nn.init.zeros_(self.wall_head[2].weight)
+            nn.init.zeros_(self.wall_head[2].bias)
 
     def forward(self, positions, velocities, hidden):
         if not self.mirror_sym:
@@ -50,9 +80,10 @@ class TokenFreeDynamics(nn.Module):
 
     def _core(self, positions, velocities, hidden):
         n = positions.shape[0]
-        node_state = torch.cat(
-            [velocities, wall_features(positions, self.n, self.wall_range), hidden], dim=-1
-        )
+        walls = wall_features(positions, self.n, self.wall_range)
+        if self.wall_lookahead:
+            walls = torch.cat([walls, wall_contact_features(positions, velocities, self.n, self.radius, self.dt)], dim=1)
+        node_state = torch.cat([velocities, walls, hidden], dim=-1)
         q = self.query(node_state)
 
         edge_index = build_radius_graph(positions, self.neighbor_radius)
@@ -75,4 +106,6 @@ class TokenFreeDynamics(nn.Module):
 
         new_hidden = self.gru(attn_out, hidden)
         delta = self.delta_head(new_hidden)
+        if self.wall_head is not None:
+            delta = delta + self.wall_head(torch.cat([velocities, walls], dim=-1))
         return delta[:, :2], delta[:, 2:], new_hidden
