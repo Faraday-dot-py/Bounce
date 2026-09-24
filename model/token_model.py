@@ -58,7 +58,7 @@ class TokenModel(torch.nn.Module):
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
                  territory_masking=False, track_query=False, free_rollout=False,
                  mirror_sym=False, velocity_readout=False,
-                 wall_lookahead=False, wall_head=False):
+                 wall_lookahead=False, wall_head=False, pair_impulse=False):
         super().__init__()
         # Initial velocity read from the frame's VX/VY channels instead of
         # finite-differenced from two detections (error 2.1 -> 0.01 cells/s,
@@ -142,12 +142,12 @@ class TokenModel(torch.nn.Module):
                 "free_rollout is incompatible with track_query/territory_masking/velocity_weight "
                 "-- it never reads an observed frame"
             )
-        if (mirror_sym or wall_lookahead or wall_head) and not free_rollout:
-            raise ValueError("mirror_sym/wall_lookahead/wall_head require free_rollout")
+        if (mirror_sym or wall_lookahead or wall_head or pair_impulse) and not free_rollout:
+            raise ValueError("mirror_sym/wall_lookahead/wall_head/pair_impulse require free_rollout")
         if free_rollout:
             self.dynamics = TokenFreeDynamics(n=n, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
                                               mirror_sym=mirror_sym, wall_lookahead=wall_lookahead,
-                                              wall_head=wall_head, radius=radius, dt=dt)
+                                              wall_head=wall_head, radius=radius, dt=dt, pair_impulse=pair_impulse)
         elif track_query:
             self.dynamics = TrackQueryDynamics(
                 hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,

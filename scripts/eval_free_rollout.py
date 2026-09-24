@@ -43,10 +43,10 @@ def count_identity_swaps(pred_positions, gt_x, gt_y, token_to_ball):
 
 
 def load_model(checkpoint, mode, n, hidden_dim, neighbor_radius, mirror_sym=False, velocity_readout=False,
-               wall_lookahead=False, wall_head=False):
+               wall_lookahead=False, wall_head=False, pair_impulse=False):
     model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
                         free_rollout=mode == "free", track_query=mode == "v17", mirror_sym=mirror_sym, velocity_readout=velocity_readout,
-                        wall_lookahead=wall_lookahead, wall_head=wall_head,
+                        wall_lookahead=wall_lookahead, wall_head=wall_head, pair_impulse=pair_impulse,
                         observation_weight=0.0 if mode == "v9-noobs" else 0.5)
     state = torch.load(checkpoint, map_location="cpu")
     if "model" in state:
@@ -90,6 +90,7 @@ def main():
     ap.add_argument("--velocity-readout", action="store_true")
     ap.add_argument("--wall-lookahead", action="store_true")
     ap.add_argument("--wall-head", action="store_true")
+    ap.add_argument("--pair-impulse", action="store_true")
     ap.add_argument("--neighbor-radius", type=float, default=4.0)
     ap.add_argument("--report-steps", type=str, default="5,10,20")
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
@@ -97,7 +98,7 @@ def main():
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.mode, args.n, args.hidden_dim, args.neighbor_radius, args.mirror_sym, args.velocity_readout,
-                       args.wall_lookahead, args.wall_head)
+                       args.wall_lookahead, args.wall_head, args.pair_impulse)
     report_steps = [int(s) for s in args.report_steps.split(",")]
 
     errors = []

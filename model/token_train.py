@@ -156,7 +156,8 @@ def train(args):
                         free_rollout=args.free_rollout,
                         mirror_sym=args.mirror_sym,
                         velocity_readout=args.velocity_readout,
-                        wall_lookahead=args.wall_lookahead, wall_head=args.wall_head).to(device)
+                        wall_lookahead=args.wall_lookahead, wall_head=args.wall_head,
+                        pair_impulse=args.pair_impulse).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -292,6 +293,8 @@ def main():
     ap.add_argument("--replay-p", type=float, default=0.25)
     ap.add_argument("--wall-lookahead", action="store_true",
                      help="add wall penetration + one-step-lookahead penetration features (TokenFreeDynamics)")
+    ap.add_argument("--pair-impulse", action="store_true",
+                     help="explicit antisymmetric sum-aggregated pair impulse (TokenFreeDynamics)")
     ap.add_argument("--wall-head", action="store_true",
                      help="separate two-layer wall-impulse head (TokenFreeDynamics)")
     ap.add_argument("--velocity-readout", action="store_true",

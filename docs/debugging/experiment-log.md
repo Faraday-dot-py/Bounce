@@ -2295,3 +2295,28 @@ was worse (impulse timing). Implemented as opt-in `--wall-lookahead`
 head outside the GRU, zero-init); v22 = readout + lookahead, v23 = v22 +
 head. Caveat from the subagent: one-step fits do not separate depth from
 training compounding.
+
+### Pair-collision diagnosis and pair_impulse (2026-09-24)
+
+Subagent diagnosis (scratchpad `pair_*.py`). True 2-ball contact: 2 steps in
+~79% of contacts, 3 in ~15%; top step carries 78% of the impulse; momentum
+change minus gravity 5e-14; relative KE out/in 1.000; normal-velocity
+reversal e ~ 0.92-1.0 for head-on/moderate offsets. v18 free rollout, 266
+contact episodes: median normal-velocity reversal -0.05 (truth 0.956),
+relative KE out/in 0.07 (truth 1.000; 97% of episodes below 0.8). Control:
+pairs passing within ~2 cells without touching also lose energy in the model
+(KE ratio 0.22), so most damping is neighbour mixing, not contact specific.
+Momentum error per step for 3-4 balls: (2.1-2.7, 1.2-1.3) at contact steps
+vs (1.2-1.5, 0.8-0.9) otherwise.
+
+Offline one-step fits on true 2-ball data: softmax attention (current
+style) R^2 0.55 (3-ball -0.86, 4-ball -0.34); antisymmetric pairwise MLP
+R^2 0.9992 / MAE 0.018 (3-ball 0.977, 4-ball 0.956, momentum error 0);
+equivariant f = alpha*unit + beta*tangent R^2 0.9999. Softmax weights sum to
+1 per target, so influence cannot scale with proximity or count, and
+messages are not antisymmetric.
+
+Implemented as opt-in `--pair-impulse` (`pair_invariants`,
+`TokenFreeDynamics.pair_head`): sum-aggregated antisymmetric pair impulse
+added to the delta, zero-init; unit test checks momentum conservation and
+y-mirror equivariance. v24 = v23 + pair impulse.
