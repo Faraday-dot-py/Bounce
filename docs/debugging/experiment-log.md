@@ -2242,3 +2242,30 @@ step 15); v18 stays somewhat more spread; differences between them are small
 next to their common departure from truth. Consistent with the energy-loss
 finding: the dominant long-horizon defect is inelastic floor/wall contact.
 Grids: `videos/token_model_v19_diagnostic_grid_s473{8,9}.png`.
+
+### Init velocity from the frame's VX/VY channels (2026-09-24)
+
+Subagent finding (probe: scratchpad `probe_init_refine.py`): `init_tokens`
+finite-differences two detected positions, but every frame carries per-cell
+VX/VY channels (bounce.py: probability-weighted mean velocity of the covering
+balls). Reading them (window radius 1, weighted by the undone PROB
+saturation -log(1-PROB)) gives init velocity error 0.010 vs 2.075 for the
+finite difference, 40/48 seeds with 4 tokens. Position error at init stays
+0.24 (single-frame quantisation of a radius-0.75 disk); a joint two-frame
+fit reaches 0.04 (not implemented). 8/48 seeds merge nearby balls in
+`find_token_positions` (min pair distance 0.78-1.93 cells).
+
+Implemented as `TokenModel(velocity_readout=True)` /
+`--velocity-readout` (default off). No-retrain eval on the v18/v19
+checkpoints (48 seeds, position error at step):
+
+| step | v18 | v18+readout | v19 | v19+readout |
+|---|---|---|---|---|
+| 1 | 0.431 | 0.361 | 0.424 | 0.336 |
+| 3 | 0.833 | 0.595 | 0.863 | 0.656 |
+| 5 | 1.176 | 0.831 | 1.269 | 0.962 |
+| 10 | 2.038 | 1.653 | 2.174 | 1.752 |
+| 20 | 5.073 | 4.613 | 5.192 | 4.783 |
+
+The checkpoints were trained with noisy init velocity, so this is a lower
+bound. v21 (job below) retrains the v19 curriculum with readout.

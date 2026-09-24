@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 import bounce
-from model.token_detect import centroid_near, find_token_positions, territory_mask
+from model.token_detect import centroid_near, find_token_positions, read_token_velocities, territory_mask
 
 
 def _prob_channel(balls, n, radius):
@@ -228,3 +228,20 @@ def test_centroid_near_still_masks_when_own_territory_has_some_mass():
     result = centroid_near(prob, positions[0], radius=1.5, margin=3.0,
                             all_positions=positions, self_idx=0)
     assert torch.allclose(result, torch.tensor([8.0, 10.0]), atol=0.3)
+
+
+def test_read_token_velocities_exact_for_isolated_balls():
+    n = 20
+    balls = [{"x": 5.3, "y": 6.6, "vx": 2.0, "vy": -1.5}, {"x": 14.2, "y": 12.4, "vx": -3.0, "vy": 0.5}]
+    G = bounce.make_grid(n)
+    bounce.splat_all(G, n, balls, 0.75)
+    frame = torch.from_numpy(np.array(G, dtype=np.float32).transpose(2, 0, 1))
+    pos = torch.tensor([[5.3, 6.6], [14.2, 12.4]])
+    vel = read_token_velocities(frame, pos)
+    assert torch.allclose(vel, torch.tensor([[2.0, -1.5], [-3.0, 0.5]]), atol=1e-3)
+
+
+def test_read_token_velocities_empty_window_is_zero():
+    frame = torch.zeros(3, 20, 20)
+    vel = read_token_velocities(frame, torch.tensor([[10.0, 10.0]]))
+    assert torch.all(vel == 0)

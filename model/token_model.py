@@ -4,7 +4,7 @@ from scipy.optimize import linear_sum_assignment
 from model.token_free import TokenFreeDynamics
 from model.token_net import TokenDynamics
 from model.token_track_query import TrackQueryDynamics
-from model.token_detect import find_token_positions, centroid_near
+from model.token_detect import find_token_positions, centroid_near, read_token_velocities
 from model.token_gate import occluding_mask
 from model.token_rasterize import rasterize_tokens
 
@@ -57,8 +57,13 @@ class TokenModel(torch.nn.Module):
                  detect_threshold=0.1, observation_weight=0.5, detect_margin=1.0,
                  max_init_speed=20.0, velocity_weight=0.0, max_expansions=6,
                  territory_masking=False, track_query=False, free_rollout=False,
-                 mirror_sym=False):
+                 mirror_sym=False, velocity_readout=False):
         super().__init__()
+        # Initial velocity read from the frame's VX/VY channels instead of
+        # finite-differenced from two detections (error 2.1 -> 0.01 cells/s,
+        # see docs/debugging/experiment-log.md). Off by default so existing
+        # checkpoints keep their trained-with init.
+        self.velocity_readout = velocity_readout
         self.n = n
         self.radius = radius
         self.dt = dt
@@ -182,7 +187,9 @@ class TokenModel(torch.nn.Module):
             return (pos1,
                     torch.zeros((0, 2), dtype=dtype, device=device),
                     torch.zeros((0, self.dynamics.hidden_dim), dtype=dtype, device=device))
-        if pos0.shape[0] == 0:
+        if self.velocity_readout:
+            velocities = read_token_velocities(second_frame, pos1)
+        elif pos0.shape[0] == 0:
             velocities = torch.zeros_like(pos1)
         else:
             dists = torch.cdist(pos1, pos0)

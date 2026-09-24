@@ -154,7 +154,8 @@ def train(args):
                         territory_masking=args.territory_masking,
                         track_query=args.track_query,
                         free_rollout=args.free_rollout,
-                        mirror_sym=args.mirror_sym).to(device)
+                        mirror_sym=args.mirror_sym,
+                        velocity_readout=args.velocity_readout).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -288,6 +289,8 @@ def main():
     ap.add_argument("--stage-tol", type=float, default=0.03)
     ap.add_argument("--stage-max-chunks", type=int, default=4)
     ap.add_argument("--replay-p", type=float, default=0.25)
+    ap.add_argument("--velocity-readout", action="store_true",
+                     help="init velocity from the frame VX/VY channels (TokenModel velocity_readout)")
     ap.add_argument("--mirror-sym", action="store_true",
                      help="y-reflection-symmetrized free-rollout dynamics (TokenFreeDynamics mirror_sym)")
     ap.add_argument("--bg-weight", type=float, default=0.05)

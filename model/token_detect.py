@@ -192,3 +192,27 @@ def find_token_positions(prob, radius, threshold=0.1, margin=1.0):
         coords[i] if occluding[i] else centroid_near(prob, coords[i], radius, margin=margin)
         for i in range(coords.shape[0])
     ])
+
+
+def read_token_velocities(frame, positions, window_radius=1.0):
+    """Velocity of each token read straight off the frame's VX/VY channels
+    (bounce.py: channel 1/2 hold the probability-weighted mean velocity of
+    the ball(s) covering each cell), averaged over cells within
+    `window_radius` of the token, weighted by the undone PROB saturation
+    (-log(1 - PROB) recovers the summed splat weight). Exact for an
+    isolated ball; a merged pair reads their weighted average. `frame` is
+    the (3, n, n) grid, `positions` is (N, 2) in (x, y) = (row, col)."""
+    prob, vx, vy = frame[0], frame[1], frame[2]
+    n = prob.shape[0]
+    weight = -torch.log1p(-prob.clamp(max=1.0 - 1e-6))
+    ii = torch.arange(n, dtype=prob.dtype, device=prob.device).view(-1, 1)
+    jj = torch.arange(n, dtype=prob.dtype, device=prob.device).view(1, -1)
+    velocities = torch.zeros((positions.shape[0], 2), dtype=prob.dtype, device=prob.device)
+    for k in range(positions.shape[0]):
+        near = ((ii - positions[k, 0]) ** 2 + (jj - positions[k, 1]) ** 2) <= window_radius ** 2
+        w = weight * near
+        total = w.sum()
+        if total > 0:
+            velocities[k, 0] = (w * vx).sum() / total
+            velocities[k, 1] = (w * vy).sum() / total
+    return velocities
