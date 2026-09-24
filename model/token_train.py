@@ -161,6 +161,8 @@ def train(args):
                         pair_impulse=args.pair_impulse,
                         position_refine=args.position_refine,
                         ball_split=args.ball_split).to(device)
+    if args.init_checkpoint:
+        model.load_state_dict(torch.load(args.init_checkpoint, map_location=device))
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -209,7 +211,7 @@ def train_stepwise(args, model, opt, loader, weights):
     rng = random.Random(args.seed)
     batches = iter(loader)
     total_batches = 0
-    for stage_steps in range(1, args.curriculum_max_steps + 1):
+    for stage_steps in range(args.curriculum_min_steps, args.curriculum_max_steps + 1):
         chunk_losses = []
         while True:
             chunk_sum, chunk_n = 0.0, 0
@@ -290,6 +292,10 @@ def main():
                      help="free-rollout curriculum 1..--curriculum-max-steps steps out, advancing "
                           "on loss plateau; overrides --epochs/--horizon-ramp")
     ap.add_argument("--curriculum-max-steps", type=int, default=20)
+    ap.add_argument("--curriculum-min-steps", type=int, default=1,
+                     help="first curriculum stage (use with --init-checkpoint to fine-tune at long unrolls)")
+    ap.add_argument("--init-checkpoint", type=str, default=None,
+                     help="state_dict to start from (must match the model flags)")
     ap.add_argument("--stage-batches", type=int, default=500)
     ap.add_argument("--stage-tol", type=float, default=0.03)
     ap.add_argument("--stage-max-chunks", type=int, default=4)
