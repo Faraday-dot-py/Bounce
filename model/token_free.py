@@ -64,6 +64,7 @@ class TokenFreeDynamics(nn.Module):
         self.hidden_dim = hidden_dim * (2 if mirror_sym else 1)
         self.neighbor_radius = neighbor_radius
         self.cell_graph = False
+        self.local_softmax = False
         self.wall_range = wall_range
         wall_dim = 4 + (8 if wall_lookahead else 0)
         node_dim = 2 + wall_dim + self.core_dim
@@ -133,7 +134,16 @@ class TokenFreeDynamics(nn.Module):
             k = self.key(edge_input)
             v = self.value(edge_input)
             scores = (q[dst] * k).sum(dim=-1) / (self.core_dim ** 0.5)
-            weights = torch.exp(scores - scores.max())
+            if self.local_softmax:
+                # Per-destination max instead of the global one: same softmax,
+                # but a token's attention no longer depends on how far its
+                # scores sit below the scene-wide max (which attenuates it via
+                # the denom clamp), so results don't change with scene size.
+                top = torch.full((n,), float("-inf"), device=positions.device, dtype=scores.dtype)
+                top = top.scatter_reduce(0, dst, scores, "amax", include_self=True)
+                weights = torch.exp(scores - top[dst])
+            else:
+                weights = torch.exp(scores - scores.max())
             denom = torch.zeros(n, device=positions.device, dtype=positions.dtype)
             denom = denom.index_add(0, dst, weights)
             weights = weights / denom[dst].clamp(min=1e-6)

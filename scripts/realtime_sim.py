@@ -18,6 +18,22 @@ import torch
 from scripts.eval_free_rollout import load_model
 
 
+def contain_state(positions, velocities, hidden, n, max_speed):
+    """Guard for the learned dynamics, which can blow up when balls are
+    stacked far outside its training density: drop non-finite tokens,
+    clamp to the box (zeroing outward velocity) and cap speed."""
+    ok = torch.isfinite(positions).all(dim=1) & torch.isfinite(velocities).all(dim=1)
+    if not bool(ok.all()):
+        positions, velocities, hidden = positions[ok], velocities[ok], hidden[ok]
+    top = n - 1.0
+    outward = ((positions < 0) & (velocities < 0)) | ((positions > top) & (velocities > 0))
+    velocities = torch.where(outward, torch.zeros_like(velocities), velocities)
+    positions = positions.clamp(0.0, top)
+    speed = velocities.norm(dim=1, keepdim=True).clamp(min=1e-6)
+    velocities = velocities * (speed.clamp(max=max_speed) / speed)
+    return positions, velocities, hidden
+
+
 class Sim:
     def __init__(self, model, max_balls, spawn_every, spawn_speed, seed):
         self.model = model
@@ -62,19 +78,8 @@ class Sim:
         self.contain()
 
     def contain(self):
-        """Guard for the learned dynamics, which can blow up when balls are
-        stacked far outside its training density: drop non-finite tokens,
-        clamp to the box (zeroing outward velocity) and cap speed."""
-        ok = torch.isfinite(self.positions).all(dim=1) & torch.isfinite(self.velocities).all(dim=1)
-        if not bool(ok.all()):
-            self.positions, self.velocities, self.hidden = self.positions[ok], self.velocities[ok], self.hidden[ok]
-        top = self.n - 1.0
-        clamped = self.positions.clamp(0.0, top)
-        outward = ((self.positions < 0) & (self.velocities < 0)) | ((self.positions > top) & (self.velocities > 0))
-        self.velocities = torch.where(outward, torch.zeros_like(self.velocities), self.velocities)
-        self.positions = clamped
-        speed = self.velocities.norm(dim=1, keepdim=True).clamp(min=1e-6)
-        self.velocities = self.velocities * (speed.clamp(max=self.max_speed) / speed)
+        self.positions, self.velocities, self.hidden = contain_state(
+            self.positions, self.velocities, self.hidden, self.n, self.max_speed)
 
 
 def speed_color(speed):
