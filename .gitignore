@@ -2,3 +2,5 @@ __pycache__/
 checkpoints/
 *.mp4
 .worktrees/
+web/tests/vectors.json
+web/tests/physics_ref.json
