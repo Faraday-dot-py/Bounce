@@ -21,7 +21,7 @@ echo "[$(date -Iseconds)] running tests before real training run"
 python -m pytest tests/test_token_*.py -q
 echo "[$(date -Iseconds)] tests passed"
 
-# v20: v20 curriculum plus --mirror-sym (y-reflection-symmetrized dynamics, twice the per-step cost); v18 architecture, stepwise curriculum -- 1 step out, advancing on loss
+# v20: v19 plus --mirror-sym (y-reflection-symmetrized dynamics, twice the per-step cost). v18 architecture, stepwise curriculum -- 1 step out, advancing on loss
 # plateau up to 20 steps (model/token_train.py train_stepwise), 25% replay of
 # shorter horizons. Batch cost ~6 ms per rollout step, worst case ~150 min.
 # Compare against v18 with scripts/eval_free_rollout.py at steps 5/10/20 and
