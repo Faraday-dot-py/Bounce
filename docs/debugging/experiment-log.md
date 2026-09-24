@@ -2757,3 +2757,14 @@ step-5 error halves (0.168 -> 0.084) but step-10 falls only 21-27% (0.578 ->
 simulator started from the model's own init reaches 2.1-2.3 at step 20, so
 step 20 is within ~0.3-0.6 of the chaos floor; remaining step 5-15 error is
 mostly dynamics.
+
+Unbiased subagent frame review of soup B (seeds 4738-4740, steps 0-30, no
+hypothesis primed): accurate through step ~8 (positions, blob shapes and
+brightness agree; balls drop to the floor by step 5-8); first visible
+departure at step 12 on seeds 4738 and 4739 (4740 stays close through step 16);
+four crisp blobs persist throughout, no fading, no merging into a smear;
+balls reach the floor and rise again (bouncing present); the model balls sit
+lower than truth after step 12 on seed 4739 (weak drift); from step 12 some
+model blobs are dimmer/greener where truth is bright yellow (brightness in the
+rasterized output, not position); positions disagree by steps 20-30 on all
+three seeds. Grids: scratchpad `g_soupb_{4738,4739,4740}.png`.
