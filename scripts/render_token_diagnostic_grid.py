@@ -69,6 +69,8 @@ if __name__ == "__main__":
     ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--track-query", action="store_true")
     ap.add_argument("--free-rollout", action="store_true")
+    for flag in ("mirror-sym", "velocity-readout", "wall-lookahead", "wall-head", "pair-impulse", "position-refine"):
+        ap.add_argument("--" + flag, action="store_true")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     ap.add_argument("--out", type=str, default="/tmp/token_artifact_grid.png")
@@ -80,7 +82,10 @@ if __name__ == "__main__":
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
                         neighbor_radius=args.neighbor_radius, velocity_weight=args.velocity_weight,
                         territory_masking=args.territory_masking, track_query=args.track_query,
-                        free_rollout=args.free_rollout)
+                        free_rollout=args.free_rollout, mirror_sym=args.mirror_sym,
+                        velocity_readout=args.velocity_readout, wall_lookahead=args.wall_lookahead,
+                        wall_head=args.wall_head, pair_impulse=args.pair_impulse,
+                        position_refine=args.position_refine)
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], num_steps)
