@@ -5,7 +5,7 @@ import torch
 import model.token_train as token_train_module
 from model.token_dataset import BounceTokenSequenceDataset
 from model.token_model import TokenModel
-from model.token_train import sampling_probability, token_rollout_loss
+from model.token_train import horizon_for_epoch, sampling_probability, token_rollout_loss
 
 
 def test_sampling_probability_ramps_linearly_and_clamps():
@@ -151,3 +151,46 @@ def test_token_rollout_loss_collapse_weight_zero_matches_no_collapse_call():
             model, grid_seq, state_seq, horizon=3, sampling_p=0.0, weights=weights, collapse_weight=0.0
         )
     mock_collapse_loss.assert_not_called()
+
+
+def _free_sample(horizon=6, seed=4738):
+    ds = BounceTokenSequenceDataset(num_samples=1, n=20, ball_range=(3, 3), seed=seed, horizon=horizon)
+    return ds[0]
+
+
+def test_horizon_for_epoch():
+    assert horizon_for_epoch(0, 10, 4, 24) == 4
+    assert horizon_for_epoch(10, 10, 4, 24) == 24
+    assert horizon_for_epoch(5, 10, 4, 24) == 14
+    assert horizon_for_epoch(3, 0, 4, 24) == 24
+
+
+def test_free_rollout_loss_finite_and_backprops():
+    torch.manual_seed(4738)
+    model = TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True)
+    grid_seq, state_seq = _free_sample()
+    weights = torch.tensor([1.0, 0.1, 0.1])
+    loss = token_rollout_loss(model, grid_seq, state_seq, 6, 0.0, weights, free=True)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
+
+
+def test_free_rollout_loss_max_steps_caps_unroll():
+    torch.manual_seed(4738)
+    model = TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True)
+    torch.nn.init.normal_(model.dynamics.delta_head.weight, std=0.1)
+    grid_seq, state_seq = _free_sample(horizon=8)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+    short = token_rollout_loss(model, grid_seq, state_seq, 8, 0.0, weights, free=True, max_steps=2)
+    full = token_rollout_loss(model, grid_seq, state_seq, 8, 0.0, weights, free=True)
+    assert not torch.isclose(short, full)
+
+
+def test_free_rollout_loss_zero_tokens_is_finite():
+    model = TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True)
+    grid_seq, state_seq = _free_sample()
+    grid_seq = torch.zeros_like(grid_seq)
+    weights = torch.tensor([1.0, 0.1, 0.1])
+    loss = token_rollout_loss(model, grid_seq, state_seq, 6, 0.0, weights, free=True)
+    assert torch.isfinite(loss)
