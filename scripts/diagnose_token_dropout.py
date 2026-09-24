@@ -26,9 +26,10 @@ from model.token_gate import occluding_mask
 
 
 def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0,
-                territory_masking=False):
+                territory_masking=False, track_query=False):
     model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
-                        velocity_weight=velocity_weight, territory_masking=territory_masking)
+                        velocity_weight=velocity_weight, territory_masking=territory_masking,
+                        track_query=track_query)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -134,6 +135,9 @@ def main():
     ap.add_argument("--territory-masking", action="store_true",
                      help="evaluate the checkpoint with territory masking enabled -- must match "
                           "how it was trained (--territory-masking in token_train.py)")
+    ap.add_argument("--track-query", action="store_true",
+                     help="evaluate the checkpoint with track-query attention -- must match "
+                          "how it was trained (--track-query in token_train.py)")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--dropout-threshold", type=float, default=0.05)
     ap.add_argument("--trace", action="store_true",
@@ -141,7 +145,7 @@ def main():
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight,
-                        territory_masking=args.territory_masking)
+                        territory_masking=args.territory_masking, track_query=args.track_query)
 
     dropout_ball_idx = []
     frame1_peak_by_ball = {}

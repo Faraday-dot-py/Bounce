@@ -115,7 +115,8 @@ def train(args):
     model = TokenModel(n=args.n, radius=0.75, dt=0.15, hidden_dim=args.hidden_dim,
                         neighbor_radius=args.neighbor_radius,
                         velocity_weight=args.velocity_weight,
-                        territory_masking=args.territory_masking).to(device)
+                        territory_masking=args.territory_masking,
+                        track_query=args.track_query).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -173,6 +174,12 @@ def main():
     # unaffected -- see docs/debugging/experiment-log.md's v14 final
     # review for why the default must stay off.
     ap.add_argument("--territory-masking", action="store_true")
+    # Opt-in architecture swap (see
+    # docs/superpowers/specs/2026-09-23-token-track-query-design.md):
+    # replaces TokenModel's hard occlusion gate + centroid_near blend
+    # with learned self-/cross-attention. Off by default so existing
+    # recipes/checkpoints are byte-for-byte unaffected.
+    ap.add_argument("--track-query", action="store_true")
     ap.add_argument("--bg-weight", type=float, default=0.05)
     ap.add_argument("--peak-weight", type=float, default=0.1)
     ap.add_argument("--boundary-weight", type=float, default=0.1)
