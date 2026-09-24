@@ -58,6 +58,9 @@ impulse + fixed symplectic integrator, GRU residual only. Not yet implemented.
   A fair baseline needs an analytic GPU sim at equal N on same hardware (not run).
 - The interactive demo cap (`--max-balls 300`) is a demo setting, not a model limit.
 
+## Generality
+Sim-specific assumptions audit: `docs/paper/sim-specific-assumptions.md`. Goal: emulate any similar particle sim (e.g. N-body gravity) with no sim-specific traits.
+
 ## Reproducibility notes
 Seed 4738 default; commit scripts+results with key metric after each experiment;
 checkpoints saved for long runs; Polaris logs at ~/<name>-<id>.log, 1 GPU job at a time.
