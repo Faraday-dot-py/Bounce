@@ -2454,3 +2454,27 @@ error, worse speed@50. Analytic gravity base gave the best speed retention
 simulator constant). Plan: v26 = all options + 40-step unrolls on an h44
 dataset (job 2886), v27 = v26 + `--speed-weight 0.1` (|v| magnitude loss,
 untested by the audit).
+
+### v25 = all options + init position refinement (2026-09-24)
+
+Job 2885, 52m13s (`polaris_train_token_v25.sh`: v19 curriculum +
+`--velocity-readout --position-refine --wall-lookahead --wall-head
+--pair-impulse`). 48 seeds, position error at step 1/2/3/5/10/15/20/50/100
+(`eval_v25_short.json`): 0.094 / 0.119 / 0.155 / 0.228 / 0.816 / 2.218 / 3.357
+/ 6.89 / 7.77.
+
+| step | v18 | v21 | v24 | v25 |
+|---|---|---|---|---|
+| 1 | 0.431 | 0.270 | 0.267 | 0.094 |
+| 3 | 0.833 | 0.329 | 0.297 | 0.155 |
+| 5 | 1.176 | 0.436 | 0.359 | 0.228 |
+| 10 | 2.038 | 1.133 | 1.055 | 0.816 |
+| 20 | 5.073 | 3.951 | 4.544 | 3.357 |
+
+Best on every step. Error at step 5 is -81% vs v18 and step 10 -60%; step 1
+is now ~ the refined init position error (0.066). For scale the twin-sim
+eps=0.1 perturbation gives 0.34 @5, 0.73 @10, 3.21 @20, so v25 at 5-10 steps
+is at about eps 0.07-0.1 and at step 20 slightly worse than eps=0.1
+(chaos-limited). Mean speed 4.7 @20, 3.6 @50, 2.2 @100 (truth 6.0 / 6.9 /
+7.9): energy retention still incomplete (v26/v27 target it with 40-step
+unrolls). Training-stage losses were much lower than v24 (stage 14 ~3.6).
