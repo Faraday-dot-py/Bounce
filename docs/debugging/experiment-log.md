@@ -2402,3 +2402,17 @@ Job 2882, 25m36s. 48 seeds, position error at step 1/2/3/5/10/15/20/50/100
 head retains more energy through step 20-50 but it still decays by step
 100. Small gains only; pair contact (v24) and the remaining contact
 defects are the open items.
+
+### v24 = v23 + antisymmetric pair impulse (2026-09-24)
+
+Job 2884, 30m35s. 48 seeds, position error at step 1/2/3/5/10/15/20/50/100
+(`eval_v24_short.json`): 0.267 / 0.278 / 0.297 / 0.359 / 1.055 / 2.834 / 4.544
+/ 7.22 / 8.31. Best at steps 2-5 so far (v23: 0.290 / 0.318 / 0.374 at 2/3/5);
+@10 equal to v23 (1.055 vs 1.050) and @20 worse (4.54 vs 4.04). Mean speed
+4.4 @20, 3.8 @50, 2.9 @100 (v23 4.25 / 3.1 / 2.1; truth 6.0 / 6.9 / 7.9).
+Training loss at stage 18 was 6.4 vs v19's 11.9, so the pair term roughly
+halves the training-set unroll loss, but the eval gap is small: steps
+15-20 are dominated by chaos amplification (twin-sim eps=0.1 reaches 3.2 @20),
+so per-step error there mostly reflects init/short-horizon error, not model
+quality. Energy retention is the best of the series but still ~50-55% of
+truth speed.
