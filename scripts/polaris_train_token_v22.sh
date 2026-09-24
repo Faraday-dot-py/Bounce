@@ -21,7 +21,7 @@ echo "[$(date -Iseconds)] running tests before real training run"
 python -m pytest tests/test_token_*.py -q
 echo "[$(date -Iseconds)] tests passed"
 
-# v22: v22 (v19 curriculum + --velocity-readout) plus --wall-lookahead (wall penetration and one-step-lookahead penetration features, TokenFreeDynamics). Wall-bounce diagnosis in docs/debugging/experiment-log.md.
+# v22: v21 (v19 curriculum + --velocity-readout) plus --wall-lookahead (wall penetration and one-step-lookahead penetration features, TokenFreeDynamics). Wall-bounce diagnosis in docs/debugging/experiment-log.md.
 # plateau up to 20 steps (model/token_train.py train_stepwise), 25% replay of
 # shorter horizons. Batch cost ~6 ms per rollout step, worst case ~75 min.
 # Compare against v18 with scripts/eval_free_rollout.py at steps 5/10/20 and
