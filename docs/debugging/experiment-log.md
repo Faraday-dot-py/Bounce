@@ -2491,3 +2491,16 @@ lose identity by step 20). Artifacts: seed 4738 step 16 shows 3 blobs with a
 wide dim bottom blob, step 20 two bright balls side by side at the bottom
 that truth lacks; seed 4739 steps 8-16 dim blue clusters where truth has
 bright blobs, 4-5 blobs at step 16. Grids: scratchpad `g_v25_{4738,4739,4740}.png`.
+
+### v25 out of distribution (2026-09-24)
+
+50x50 grid, 100 balls, 8 seeds, 100 steps (`eval_v{18,25}_ood_short.json`),
+trained on 20x20 with 2-6 balls. Position error at step 1/5/10/20/50/100:
+v18 0.694 / 2.152 / 3.792 / 16.09 / 24.72 / 25.77; v25 0.169 / 0.707 / 2.219 /
+8.43 / 18.85 / 21.19. Baselines on the same scenarios (`eval_baselines_ood`):
+stay 22.49 @20 / 25.78 @100; oracle centroid 13.18 @20 / 16.74 @100. So at
+step 20 v25 beats both by a wide margin (8.4 vs 22.5 stay, 13.2 oracle
+centroid); at step 100 it is below stay (21.2 vs 25.8) but above the oracle
+centroid (16.7). Faded-token fraction 0; identity swaps ~694 of ~700 tokens
+(saturated, as before). The gains from velocity readout, position refinement
+and contact terms transfer to 25x the area and ~20x the ball density.
