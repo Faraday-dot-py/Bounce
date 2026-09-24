@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from model.token_model import TokenModel, _assign_velocity_pairs
@@ -439,3 +440,53 @@ def test_track_query_rejects_velocity_weight():
     import pytest
     with pytest.raises(ValueError):
         TokenModel(n=20, radius=0.75, dt=0.15, track_query=True, velocity_weight=0.5)
+
+
+def test_free_rollout_step_free_coasts_at_init_and_ignores_frames():
+    n, radius, dt = 20, 0.75, 0.15
+    model = TokenModel(n=n, radius=radius, dt=dt, free_rollout=True)
+    positions = torch.tensor([[5.0, 5.0], [12.0, 8.0]])
+    velocities = torch.tensor([[2.0, -1.0], [0.0, 1.0]])
+    hidden = torch.zeros(2, model.dynamics.hidden_dim)
+    pos, vel, new_hidden, grid = model.step_free(positions, velocities, hidden)
+    assert torch.allclose(pos, positions + velocities * dt, atol=1e-5)
+    assert torch.allclose(vel, velocities, atol=1e-5)
+    assert grid.shape == (3, n, n)
+    assert torch.allclose(grid, rasterize_tokens(pos, vel, n, radius))
+
+
+def test_free_rollout_token_count_is_fixed_over_long_rollout():
+    torch.manual_seed(4738)
+    model = TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True)
+    torch.nn.init.normal_(model.dynamics.delta_head.weight, std=0.1)
+    positions = torch.rand(5, 2) * 15 + 2
+    velocities = torch.randn(5, 2)
+    hidden = torch.zeros(5, model.dynamics.hidden_dim)
+    for _ in range(50):
+        positions, velocities, hidden, grid = model.step_free(positions, velocities, hidden)
+        assert positions.shape == (5, 2)
+        assert torch.isfinite(grid).all()
+
+
+def test_free_rollout_zero_tokens():
+    model = TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True)
+    positions = torch.zeros(0, 2)
+    velocities = torch.zeros(0, 2)
+    hidden = torch.zeros(0, model.dynamics.hidden_dim)
+    pos, vel, new_hidden, grid = model.step_free(positions, velocities, hidden)
+    assert pos.shape == (0, 2)
+    assert grid.shape == (3, 20, 20)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"track_query": True}, {"territory_masking": True}, {"velocity_weight": 0.5},
+])
+def test_free_rollout_incompatible_options_raise(kwargs):
+    with pytest.raises(ValueError):
+        TokenModel(n=20, radius=0.75, dt=0.15, free_rollout=True, **kwargs)
+
+
+def test_step_free_requires_free_rollout():
+    model = TokenModel(n=20, radius=0.75, dt=0.15)
+    with pytest.raises(RuntimeError):
+        model.step_free(torch.zeros(1, 2), torch.zeros(1, 2), torch.zeros(1, model.dynamics.hidden_dim))
