@@ -2123,3 +2123,42 @@ is no better than stay (25.34). v9 @20 (5.83) equals stay @20 (5.83) exactly
 5.10 are ~13% better). v9's late error (15.12/41.28) is worse than stay, so
 its edge over the old baseline is really that v9 diverges. Free rollout
 fixes divergence/fading; it does not add tracking skill.
+
+### Predictability spike: is identity loss a chaos limit? (2026-09-24)
+
+Throwaway probes: `scripts/probe_predictability.py`, `probe_init_error.py`,
+`probe_oracle_init.py`. 20x20, 4 balls, 48 seeds (start 4738).
+
+Twin simulator runs, frame-0 pos+vel perturbed by N(0, eps), mean per-ball
+divergence (cells):
+
+| eps | @5 | @10 | @20 | @50 | @100 | median steps to >1 / >3 cells |
+|---|---|---|---|---|---|---|
+| 0.001 | 0.003 | 0.009 | 0.15 | 4.14 | 8.18 | 39 / 44.5 |
+| 0.01 | 0.034 | 0.083 | 0.97 | 5.44 | 8.53 | 30 / 36.5 |
+| 0.1 | 0.340 | 0.727 | 3.21 | 7.09 | 8.81 | 13 / 23 |
+
+Divergence saturates ~8.5-8.8 (unrelated-trajectory level).
+
+v18 init_tokens error at frame 1 (44 seeds with 4 tokens): position 0.251
+cells; velocity 2.10 vs mean true speed 2.46 (finite-difference of detected
+positions over dt=0.15 amplifies position noise ~1/dt).
+
+v18 free rollout from detected vs ground-truth init (position error, 44 seeds):
+
+| init | @5 | @10 | @20 | @50 | @100 |
+|---|---|---|---|---|---|
+| detected | 1.00 | 1.85 | 4.80 | 8.45 | 7.41 |
+| oracle | 0.64 | 1.40 | 4.40 | 8.17 | 7.39 |
+
+Read: (1) individual-ball prediction is chaos-limited: even eps=0.1 loses
+3 cells by step ~23 and everything is at the saturation level by ~50. v18's
+~8.6 @300 is that saturation level; the stay-put baseline and v18 are
+equally "unpredictable" there. (2) Init error is not the bottleneck --
+oracle init helps early (0.64 vs 1.00 @5) and is gone by step 20 (4.40 vs
+4.80). (3) Dynamics error is: v18 @5 with oracle init (0.64) is ~2x the
+eps=0.1 twin (0.34); @20 (4.40) is ~1.4x (3.21). Headroom exists only at
+steps ~3-20; beyond ~25 no model can track identity from two frames.
+Consequence: position-error-at-300 and swap counts at 300 steps are not
+meaningful comparators; swap count at 300 (~139-144 of ~170 tokens) is
+saturated by chaos, not model quality.
