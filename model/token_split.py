@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from scipy.optimize import least_squares
 
-from model.token_detect import find_token_positions
+from model.token_detect import find_token_positions, read_token_velocities
 from model.token_refine import refine_positions
 
 _EPS = 1e-9
@@ -175,6 +175,22 @@ def _velocities(frame, pos, w, r):
     return out
 
 
+def _safe_velocities(f1, pos, w, radius, max_disagreement=4.0, max_speed=20.0):
+    """`_velocities`, except where the least-squares solve is ill-conditioned
+    (stacked or nearly coincident balls make the splat columns collinear and
+    the solution explode: errors of 20+ cells/s on settled and clustered
+    scenes, and 1e8 training losses). A token whose solved velocity is
+    non-finite, faster than `max_speed`, or more than `max_disagreement` from
+    the windowed VX/VY readout falls back to the readout."""
+    solved = _velocities(f1, pos, w, radius)
+    if len(pos) == 0:
+        return solved
+    readout = read_token_velocities(torch.from_numpy(f1).float(), torch.from_numpy(pos).float()).double().numpy()
+    bad = (~np.isfinite(solved).all(axis=1) | (np.linalg.norm(solved, axis=1) > max_speed)
+           | (np.linalg.norm(solved - readout, axis=1) > max_disagreement))
+    return np.where(bad[:, None], readout, solved)
+
+
 def _seeds(prob, radius):
     return find_token_positions(torch.from_numpy(prob.astype(np.float32)), radius, 0.1).double().numpy()
 
@@ -185,17 +201,21 @@ def detect_balls(frame0, frame1, radius=0.75, dt=0.15, tau=1e-3, refine=True, re
     seeds = _seeds(f1[0], radius)
     if len(seeds) > max_tokens:
         P = torch.from_numpy(seeds).float()
-        V = torch.from_numpy(_velocities(f1, seeds, w1, radius)).float()
+        V = torch.from_numpy(_safe_velocities(f1, seeds, w1, radius)).float()
         return (P, V, np.inf) if return_all else (P, V)
     pos, sse = np.zeros((0, 2)), np.inf
     if len(seeds):
         pos, sse = _polish(w1, seeds, radius)
     if not sse < 1e-6:
         pos, sse = greedy_fit(w1, radius, tau=tau, seeds=seeds if len(seeds) else None)
-    vel = _velocities(f1, pos, w1, radius)
+    n = w1.shape[0]
+    if not np.isfinite(pos).all() or (pos < -1.0).any() or (pos > n).any():
+        pos = seeds
+        sse = np.inf
+    vel = _safe_velocities(f1, pos, w1, radius)
     P = torch.from_numpy(pos).float()
     V = torch.from_numpy(vel).float()
     if refine and len(pos):
         P = refine_positions(frame0.float(), frame1.float(), P, V, radius=radius, dt=dt)
-        V = torch.from_numpy(_velocities(f1, P.double().numpy(), w1, radius)).float()
+        V = torch.from_numpy(_safe_velocities(f1, P.double().numpy(), w1, radius)).float()
     return (P, V, sse) if return_all else (P, V)
