@@ -1,0 +1,12 @@
+mean vy (y is non-gravity axis); model, truth, model frac seeds <0 ; seeds 44
+  step  1: model   0.058  truth   0.090  frac<0 0.50
+  step  2: model   0.074  truth   0.084  frac<0 0.43
+  step  3: model   0.082  truth   0.086  frac<0 0.45
+  step  5: model   0.080  truth   0.107  frac<0 0.48
+  step  8: model   0.114  truth   0.178  frac<0 0.48
+  step 10: model   0.158  truth   0.237  frac<0 0.45
+  step 15: model   0.222  truth   0.289  frac<0 0.41
+  step 20: model   0.229  truth   0.311  frac<0 0.41
+  step 30: model   0.066  truth   0.147  frac<0 0.50
+model mean vy over steps 3-20 per seed: mean 0.1640239804983139 truth 0.23555895686149597
+isolated interior token, rest of world empty:

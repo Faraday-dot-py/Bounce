@@ -2320,3 +2320,21 @@ Implemented as opt-in `--pair-impulse` (`pair_invariants`,
 `TokenFreeDynamics.pair_head`): sum-aggregated antisymmetric pair impulse
 added to the delta, zero-init; unit test checks momentum conservation and
 y-mirror equivariance. v24 = v23 + pair impulse.
+
+### v20 mirror-symmetrized dynamics (2026-09-24)
+
+Job 2879 (`polaris_train_token_v20.sh`, v19 curriculum + `--mirror-sym`),
+31m38s. 48 seeds, position error at step (`results/eval_v20_short.json`):
+1: 0.406, 2: 0.610, 3: 0.815, 5: 1.202, 10: 2.149, 15: 3.721, 20: 5.155,
+50: 7.40, 100: 7.90 (v18: 0.431, 0.641, 0.833, 1.176, 2.038, 3.582, 5.073).
+
+y-bias fixed (`probe_y_bias.py --mirror-sym`): mean token vy, model / truth:
+step 10 +0.158 / +0.237, step 20 +0.229 / +0.311, step 30 +0.066 / +0.147;
+fraction of seeds with mean vy < 0 is 0.41-0.50 at every step (v18: -0.99 at
+step 20, 1.00 at step 30). The leftward drift is gone.
+
+Accuracy did not improve (error at 5/10/20 within noise of v18) and speed
+still collapses (mean speed 2.9 at step 20, 1.0 at step 50, 0.7 at step 100
+vs truth 6.0/6.9/7.9): the y-bias was a real defect but not the dominant
+source of short-horizon error. Wall and pair contact and init velocity are
+the next levers (v21-v24).

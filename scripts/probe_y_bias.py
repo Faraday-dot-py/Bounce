@@ -17,11 +17,16 @@ from scripts.eval_free_rollout import load_model
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--mirror-sym", action="store_true")
+    ap.add_argument("--velocity-readout", action="store_true")
+    ap.add_argument("--wall-lookahead", action="store_true")
+    ap.add_argument("--wall-head", action="store_true")
+    ap.add_argument("--pair-impulse", action="store_true")
     ap.add_argument("--num-seeds", type=int, default=48)
     ap.add_argument("--num-steps", type=int, default=30)
     ap.add_argument("--base-seed", type=int, default=4738)
     args = ap.parse_args()
-    model = load_model(args.checkpoint, "free", 20, 32, 4.0)
+    model = load_model(args.checkpoint, "free", 20, 32, 4.0, args.mirror_sym, args.velocity_readout, args.wall_lookahead, args.wall_head, args.pair_impulse)
 
     mv, tv = [], []
     for seed in range(args.base_seed, args.base_seed + args.num_seeds):

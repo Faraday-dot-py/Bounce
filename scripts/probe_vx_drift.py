@@ -19,12 +19,17 @@ def stats(vel):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--mirror-sym", action="store_true")
+    ap.add_argument("--velocity-readout", action="store_true")
+    ap.add_argument("--wall-lookahead", action="store_true")
+    ap.add_argument("--wall-head", action="store_true")
+    ap.add_argument("--pair-impulse", action="store_true")
     ap.add_argument("--num-seeds", type=int, default=48)
     ap.add_argument("--num-steps", type=int, default=100)
     ap.add_argument("--base-seed", type=int, default=4738)
     args = ap.parse_args()
     report = [1, 5, 10, 20, 50, 100]
-    model = load_model(args.checkpoint, "free", 20, 32, 4.0)
+    model = load_model(args.checkpoint, "free", 20, 32, 4.0, args.mirror_sym, args.velocity_readout, args.wall_lookahead, args.wall_head, args.pair_impulse)
     rows = {"model": [], "truth": []}
     for seed in range(args.base_seed, args.base_seed + args.num_seeds):
         frames, states = simulate(20, 4, seed, args.num_steps + 1)

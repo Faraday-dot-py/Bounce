@@ -24,10 +24,10 @@ from model.token_model import TokenModel
 
 
 def load_model(checkpoint_path, n, hidden_dim, neighbor_radius, velocity_weight=0.0,
-                territory_masking=False, track_query=False, free_rollout=False):
+                territory_masking=False, track_query=False, free_rollout=False, **model_kwargs):
     model = TokenModel(n=n, radius=0.75, dt=0.15, hidden_dim=hidden_dim, neighbor_radius=neighbor_radius,
                         velocity_weight=velocity_weight, territory_masking=territory_masking,
-                        track_query=track_query, free_rollout=free_rollout)
+                        track_query=track_query, free_rollout=free_rollout, **model_kwargs)
     model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     model.eval()
     return model
@@ -79,13 +79,20 @@ if __name__ == "__main__":
     ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--track-query", action="store_true")
     ap.add_argument("--free-rollout", action="store_true")
+    ap.add_argument("--mirror-sym", action="store_true")
+    ap.add_argument("--velocity-readout", action="store_true")
+    ap.add_argument("--wall-lookahead", action="store_true")
+    ap.add_argument("--wall-head", action="store_true")
+    ap.add_argument("--pair-impulse", action="store_true")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
     args = ap.parse_args()
 
     model = load_model(args.checkpoint, args.n, args.hidden_dim, args.neighbor_radius, args.velocity_weight,
                         territory_masking=args.territory_masking, track_query=args.track_query,
-                        free_rollout=args.free_rollout)
+                        free_rollout=args.free_rollout, mirror_sym=args.mirror_sym,
+                        velocity_readout=args.velocity_readout, wall_lookahead=args.wall_lookahead,
+                        wall_head=args.wall_head, pair_impulse=args.pair_impulse)
     gt_frames = simulate_ground_truth(args.n, args.num_balls, args.seed, args.num_steps, gravity=args.gravity)
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], args.num_steps)
 
