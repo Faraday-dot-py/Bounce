@@ -74,3 +74,53 @@ class TrackQueryDynamics(nn.Module):
             weights = weights / denom[dst].clamp(min=1e-6)
             attn_out = attn_out.index_add(0, dst, weights.unsqueeze(-1) * v)
         return attn_out
+
+    def _cross_attention_one(self, prob, vx, vy, position, query_vec):
+        """Cross-attention for one token's bounded local window --
+        replaces occluding_mask + centroid_near entirely in this path.
+        Gathers the same window centroid_near searches (base half-width
+        ceil(radius + margin), widening by one cell per retry up to
+        max_expansions if empty), builds a per-cell feature
+        [PROB, VX, VY, dx, dy] (dx/dy relative to this token's own
+        position -- no absolute position enters), and reads it with a
+        learned softmax attention query built from the token's
+        post-self-attention hidden state. Returns (readout, obs_pos);
+        obs_pos is the attention-weighted centroid, kept only as a
+        diagnostic/bookkeeping byproduct (never a hard blend). If every
+        expansion's window is empty, falls back to an all-zero readout
+        and obs_pos == position -- there is no mask here, so there is no
+        masked-then-unmasked retry to replicate (unlike centroid_near)."""
+        n = prob.shape[0]
+        cx = int(round(float(position[0].detach())))
+        cy = int(round(float(position[1].detach())))
+        step = max(1, int(math.ceil(self.radius)))
+        base_half = int(math.ceil(self.radius + self.margin))
+        for expansion in range(self.max_expansions + 1):
+            half = base_half + expansion * step
+            i_lo_raw, i_hi_raw = cx - half, cx + half
+            j_lo_raw, j_hi_raw = cy - half, cy + half
+            if i_hi_raw < 0 or i_lo_raw > n - 1 or j_hi_raw < 0 or j_lo_raw > n - 1:
+                continue
+            i_lo, i_hi = max(0, i_lo_raw), min(n - 1, i_hi_raw)
+            j_lo, j_hi = max(0, j_lo_raw), min(n - 1, j_hi_raw)
+            window_prob = prob[i_lo:i_hi + 1, j_lo:j_hi + 1]
+            if float(window_prob.sum()) <= 1e-6:
+                continue
+            window_vx = vx[i_lo:i_hi + 1, j_lo:j_hi + 1]
+            window_vy = vy[i_lo:i_hi + 1, j_lo:j_hi + 1]
+            ii = torch.arange(i_lo, i_hi + 1, device=prob.device, dtype=prob.dtype).view(-1, 1)
+            jj = torch.arange(j_lo, j_hi + 1, device=prob.device, dtype=prob.dtype).view(1, -1)
+            dx = (ii - position[0]).expand_as(window_prob)
+            dy = (jj - position[1]).expand_as(window_prob)
+            cell_feat = torch.stack([window_prob, window_vx, window_vy, dx, dy], dim=-1)
+            cell_feat = cell_feat.reshape(-1, 5)
+            k = self.cross_key(cell_feat)
+            v = self.cross_value(cell_feat)
+            scores = (query_vec.unsqueeze(0) * k).sum(dim=-1) / (self.hidden_dim ** 0.5)
+            weights = torch.softmax(scores, dim=0)
+            readout = (weights.unsqueeze(-1) * v).sum(dim=0)
+            centroid_dx = (weights * dx.reshape(-1)).sum()
+            centroid_dy = (weights * dy.reshape(-1)).sum()
+            obs_pos = position + torch.stack([centroid_dx, centroid_dy])
+            return readout, obs_pos
+        return query_vec.new_zeros(self.hidden_dim), position
