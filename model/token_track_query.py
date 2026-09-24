@@ -124,3 +124,28 @@ class TrackQueryDynamics(nn.Module):
             obs_pos = position + torch.stack([centroid_dx, centroid_dy])
             return readout, obs_pos
         return query_vec.new_zeros(self.hidden_dim), position
+
+    def forward(self, positions, velocities, hidden, observed_frame):
+        n = positions.shape[0]
+        if n == 0:
+            zeros2 = positions.new_zeros((0, 2))
+            zeros_h = hidden.new_zeros((0, self.hidden_dim))
+            return zeros2, zeros2, zeros_h, zeros2
+
+        attn_out_self = self._self_attention(positions, velocities, hidden)
+        query_vecs = self.cross_query(attn_out_self)
+
+        prob, vx, vy = observed_frame[0], observed_frame[1], observed_frame[2]
+        readouts = []
+        obs_positions = []
+        for i in range(n):
+            readout, obs_pos = self._cross_attention_one(prob, vx, vy, positions[i], query_vecs[i])
+            readouts.append(readout)
+            obs_positions.append(obs_pos)
+        cross_readout = torch.stack(readouts, dim=0)
+        obs_pos = torch.stack(obs_positions, dim=0)
+
+        gru_input = torch.cat([attn_out_self, cross_readout], dim=-1)
+        new_hidden = self.gru(gru_input, hidden)
+        delta = self.delta_head(new_hidden)
+        return delta[:, :2], delta[:, 2:], new_hidden, obs_pos

@@ -131,3 +131,112 @@ def test_cross_attention_translation_invariant():
     )
     assert torch.allclose(readout, readout_s, atol=1e-5)
     assert torch.allclose(obs_pos_s - obs_pos, torch.tensor([float(shift), float(shift)]), atol=1e-5)
+
+
+def _random_frame(n, num_balls, seed=4738):
+    from model.token_rasterize import rasterize_tokens
+    g = torch.Generator().manual_seed(seed)
+    positions = torch.rand(num_balls, 2, generator=g) * (n - 4) + 2
+    velocities = torch.randn(num_balls, 2, generator=g)
+    return rasterize_tokens(positions, velocities, n, 0.75), positions, velocities
+
+
+def test_forward_shapes():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    observed_frame, positions, velocities = _random_frame(20, 5)
+    hidden = torch.zeros(5, 8)
+    delta_pos, delta_vel, new_hidden, obs_pos = model(positions, velocities, hidden, observed_frame)
+    assert delta_pos.shape == (5, 2)
+    assert delta_vel.shape == (5, 2)
+    assert new_hidden.shape == (5, 8)
+    assert obs_pos.shape == (5, 2)
+
+
+def test_delta_head_is_zero_at_init():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    observed_frame, positions, velocities = _random_frame(20, 4)
+    hidden = torch.randn(4, 8)
+    delta_pos, delta_vel, _, _ = model(positions, velocities, hidden, observed_frame)
+    assert torch.allclose(delta_pos, torch.zeros_like(delta_pos))
+    assert torch.allclose(delta_vel, torch.zeros_like(delta_vel))
+
+
+def test_forward_gradients_flow_to_both_attention_stages():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    observed_frame, positions, velocities = _random_frame(20, 4)
+    positions = positions.clone().requires_grad_(True)
+    hidden = torch.randn(4, 8)
+    delta_pos, delta_vel, new_hidden, _ = model(positions, velocities, hidden, observed_frame)
+    new_hidden.sum().backward()
+    assert model.self_query.weight.grad is not None
+    assert torch.any(model.self_query.weight.grad != 0.0)
+    assert model.cross_query.weight.grad is not None
+    assert torch.any(model.cross_query.weight.grad != 0.0)
+
+
+def test_forward_empty_token_set():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=3.0)
+    n = 20
+    observed_frame = torch.zeros(3, n, n)
+    positions = torch.zeros(0, 2)
+    velocities = torch.zeros(0, 2)
+    hidden = torch.zeros(0, 8)
+    delta_pos, delta_vel, new_hidden, obs_pos = model(positions, velocities, hidden, observed_frame)
+    assert delta_pos.shape == (0, 2)
+    assert delta_vel.shape == (0, 2)
+    assert new_hidden.shape == (0, 8)
+    assert obs_pos.shape == (0, 2)
+    assert not torch.isnan(delta_pos).any()
+
+
+def test_forward_permutation_equivariant():
+    torch.manual_seed(4738)
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=4.0)
+    observed_frame, positions, velocities = _random_frame(20, 4)
+    hidden = torch.randn(4, 8)
+    perm = torch.tensor([2, 0, 3, 1])
+
+    delta_pos, delta_vel, new_hidden, obs_pos = model(positions, velocities, hidden, observed_frame)
+    delta_pos_p, delta_vel_p, new_hidden_p, obs_pos_p = model(
+        positions[perm], velocities[perm], hidden[perm], observed_frame
+    )
+
+    assert torch.allclose(delta_pos[perm], delta_pos_p, atol=1e-5)
+    assert torch.allclose(delta_vel[perm], delta_vel_p, atol=1e-5)
+    assert torch.allclose(new_hidden[perm], new_hidden_p, atol=1e-5)
+    assert torch.allclose(obs_pos[perm], obs_pos_p, atol=1e-5)
+
+
+def test_forward_translation_invariant():
+    # Shift positions and the observed frame together (cyclic roll,
+    # tokens kept well clear of the wrap boundary before and after) --
+    # delta_pos/delta_vel/new_hidden must be unchanged (obs_pos is
+    # absolute and is expected to shift by the same amount).
+    torch.manual_seed(4738)
+    from model.token_rasterize import rasterize_tokens
+    model = TrackQueryDynamics(hidden_dim=8, neighbor_radius=4.0)
+    n = 20
+    g = torch.Generator().manual_seed(4738)
+    positions = torch.rand(3, 2, generator=g) * 10 + 5.0  # kept in [5, 15] before AND after clamping below
+    velocities = torch.randn(3, 2, generator=g)
+    positions = torch.clamp(positions, 5.0, n - 5.0)
+    observed_frame = rasterize_tokens(positions, velocities, n, 0.75)
+    hidden = torch.randn(3, 8)
+    shift = 2
+
+    delta_pos, delta_vel, new_hidden, obs_pos = model(positions, velocities, hidden, observed_frame)
+
+    shifted_frame = torch.roll(observed_frame, shifts=(shift, shift), dims=(1, 2))
+    shifted_positions = positions + shift
+    delta_pos_s, delta_vel_s, new_hidden_s, obs_pos_s = model(
+        shifted_positions, velocities, hidden, shifted_frame
+    )
+
+    assert torch.allclose(delta_pos, delta_pos_s, atol=1e-4)
+    assert torch.allclose(delta_vel, delta_vel_s, atol=1e-4)
+    assert torch.allclose(new_hidden, new_hidden_s, atol=1e-4)
+    assert torch.allclose(obs_pos_s - obs_pos, torch.full_like(obs_pos, float(shift)), atol=1e-4)
