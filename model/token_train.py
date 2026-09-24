@@ -159,7 +159,8 @@ def train(args):
                         velocity_readout=args.velocity_readout,
                         wall_lookahead=args.wall_lookahead, wall_head=args.wall_head,
                         pair_impulse=args.pair_impulse,
-                        position_refine=args.position_refine).to(device)
+                        position_refine=args.position_refine,
+                        ball_split=args.ball_split).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     weights = torch.tensor([1.0, 0.1, 0.1], device=device)
 
@@ -295,6 +296,8 @@ def main():
     ap.add_argument("--replay-p", type=float, default=0.25)
     ap.add_argument("--wall-lookahead", action="store_true",
                      help="add wall penetration + one-step-lookahead penetration features (TokenFreeDynamics)")
+    ap.add_argument("--ball-split", action="store_true",
+                     help="overlap-resolving init detection (needs --velocity-readout)")
     ap.add_argument("--position-refine", action="store_true",
                      help="sub-cell init position refinement (needs --velocity-readout)")
     ap.add_argument("--pair-impulse", action="store_true",

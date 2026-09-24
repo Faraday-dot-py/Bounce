@@ -2504,3 +2504,24 @@ centroid); at step 100 it is below stay (21.2 vs 25.8) but above the oracle
 centroid (16.7). Faded-token fraction 0; identity swaps ~694 of ~700 tokens
 (saturated, as before). The gains from velocity readout, position refinement
 and contact terms transfer to 25x the area and ~20x the ball density.
+
+### Overlap-resolving detection: ball_split (2026-09-24)
+
+Subagent-built (scratchpad `split_detect.py`, cleaned into
+`model/token_split.py`): greedy residual fit of the desaturated PROB with
+exact splats, one ball per iteration, prune/merge pass; velocities by linear
+least squares on VX/VY given the fit. Token count right in 100% of frames on
+seeds 4738-4785 (old detector 85.4% frame 0, 91.7% frame 1) and 199/200 on
+100 random 2-6-ball scenes (old 86% / 92%); no false splits; ~19 ms/frame
+(4 balls). Mirror ambiguity for balls lighting 2 cells leaves 0.22 cell error
+before refinement, 0.083 after `refine_positions`. Scenes with >12 seed
+detections skip the fit (cost). Opt-in `TokenModel(ball_split=True)` /
+`--ball-split` (needs `--velocity-readout`).
+
+v25 checkpoint with ball_split, no retrain (`eval_v25_split_noretrain.json`):
+token-count mismatch seeds 8 -> 0; position error at step 1/2/3/5/10/15/20
+0.108 / 0.134 / 0.173 / 0.252 / 0.750 / 2.040 / 3.248 (v25: 0.094 / 0.119 /
+0.155 / 0.228 / 0.816 / 2.218 / 3.357). Not directly comparable: the 8
+merged-ball seeds now contribute all their balls (previously scored only on
+the detected tokens), which raises early steps slightly; steps 10-20 improve
+despite that. v28 retrains v25's recipe with `--ball-split`.

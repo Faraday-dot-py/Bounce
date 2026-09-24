@@ -69,7 +69,7 @@ if __name__ == "__main__":
     ap.add_argument("--territory-masking", action="store_true")
     ap.add_argument("--track-query", action="store_true")
     ap.add_argument("--free-rollout", action="store_true")
-    for flag in ("mirror-sym", "velocity-readout", "wall-lookahead", "wall-head", "pair-impulse", "position-refine"):
+    for flag in ("mirror-sym", "velocity-readout", "wall-lookahead", "wall-head", "pair-impulse", "position-refine", "ball-split"):
         ap.add_argument("--" + flag, action="store_true")
     ap.add_argument("--gravity", type=float, default=9.0)
     ap.add_argument("--seed", type=int, default=4738)
@@ -85,7 +85,7 @@ if __name__ == "__main__":
                         free_rollout=args.free_rollout, mirror_sym=args.mirror_sym,
                         velocity_readout=args.velocity_readout, wall_lookahead=args.wall_lookahead,
                         wall_head=args.wall_head, pair_impulse=args.pair_impulse,
-                        position_refine=args.position_refine)
+                        position_refine=args.position_refine, ball_split=args.ball_split)
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
     pred_frames = rollout(model, gt_frames[0], gt_frames[1], num_steps)

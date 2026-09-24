@@ -23,11 +23,12 @@ def main():
     ap.add_argument("--wall-head", action="store_true")
     ap.add_argument("--pair-impulse", action="store_true")
     ap.add_argument("--position-refine", action="store_true")
+    ap.add_argument("--ball-split", action="store_true")
     ap.add_argument("--num-seeds", type=int, default=48)
     ap.add_argument("--num-steps", type=int, default=30)
     ap.add_argument("--base-seed", type=int, default=4738)
     args = ap.parse_args()
-    model = load_model(args.checkpoint, "free", 20, 32, 4.0, args.mirror_sym, args.velocity_readout, args.wall_lookahead, args.wall_head, args.pair_impulse, args.position_refine)
+    model = load_model(args.checkpoint, "free", 20, 32, 4.0, args.mirror_sym, args.velocity_readout, args.wall_lookahead, args.wall_head, args.pair_impulse, args.position_refine, args.ball_split)
 
     mv, tv = [], []
     for seed in range(args.base_seed, args.base_seed + args.num_seeds):

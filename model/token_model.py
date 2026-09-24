@@ -6,6 +6,7 @@ from model.token_net import TokenDynamics
 from model.token_track_query import TrackQueryDynamics
 from model.token_detect import find_token_positions, centroid_near, read_token_velocities
 from model.token_refine import refine_positions
+from model.token_split import detect_balls
 from model.token_gate import occluding_mask
 from model.token_rasterize import rasterize_tokens
 
@@ -60,7 +61,7 @@ class TokenModel(torch.nn.Module):
                  territory_masking=False, track_query=False, free_rollout=False,
                  mirror_sym=False, velocity_readout=False,
                  wall_lookahead=False, wall_head=False, pair_impulse=False,
-                 position_refine=False):
+                 position_refine=False, ball_split=False):
         super().__init__()
         # Initial velocity read from the frame's VX/VY channels instead of
         # finite-differenced from two detections (error 2.1 -> 0.01 cells/s,
@@ -72,6 +73,11 @@ class TokenModel(torch.nn.Module):
         if position_refine and not velocity_readout:
             raise ValueError("position_refine requires velocity_readout")
         self.position_refine = position_refine
+        # Overlap-resolving detection (model.token_split); like
+        # position_refine it needs the VX/VY-channel velocities.
+        if ball_split and not velocity_readout:
+            raise ValueError("ball_split requires velocity_readout")
+        self.ball_split = ball_split
         self.n = n
         self.radius = radius
         self.dt = dt
@@ -192,6 +198,12 @@ class TokenModel(torch.nn.Module):
         pos1 = find_token_positions(second_frame[0], self.radius, self.detect_threshold)
         dtype = first_frame.dtype
         device = first_frame.device
+        if self.ball_split:
+            pos1, split_velocities = detect_balls(first_frame, second_frame, radius=self.radius, dt=self.dt,
+                                                  refine=self.position_refine)
+            if pos1.shape[0] > 0:
+                hidden = torch.zeros((pos1.shape[0], self.dynamics.hidden_dim), dtype=dtype, device=device)
+                return pos1.to(dtype), split_velocities.to(dtype), hidden
         if pos1.shape[0] == 0:
             return (pos1,
                     torch.zeros((0, 2), dtype=dtype, device=device),
