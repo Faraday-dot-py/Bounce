@@ -2768,3 +2768,27 @@ lower than truth after step 12 on seed 4739 (weak drift); from step 12 some
 model blobs are dimmer/greener where truth is bright yellow (brightness in the
 rasterized output, not position); positions disagree by steps 20-30 on all
 three seeds. Grids: scratchpad `g_soupb_{4738,4739,4740}.png`.
+
+### Contact-context diagnosis of soup B and contact-weighted fine-tune (2026-09-24)
+
+Subagent analysis (scratchpad `ctx_analysis.py`, 48 seeds from 4738,
+teacher-forced from exact ground-truth states, hidden state from a free
+rollout at exact init). Pair contact (true neighbor distance < 1.6 or
+imminent) is 11% of token-steps but 64% of one-step position error and 72% of
+velocity error (|dpos| 0.209, |dvel| 1.87 vs 0.023 / 0.070 in free flight);
+floor contact is second (35% of tokens, 33% / 27% of the errors; contact
+within 2 steps 0.130 / 1.02). Free flight, y-walls, ceiling and
+non-contacting neighbors together add <4% of squared error. Free rollout
+from exact init, error at state 10 (mean 0.285): no contact 21% of tokens,
+error 0.074 (0.3% of squared error); wall only 46%, 0.141 (4.8%); pair only
+12.5%, 0.77 (64%); wall and pair 21%, 0.52 (30%): tokens with a pair contact
+hold ~94% of squared error. Wall bounces are unbiased scatter (signed error
+x +0.035, y +0.052 vs |e| 0.18 / 0.14). Floor rebound speed ratio (out/in,
+median): truth 0.813, model 0.78-0.79; low for slow impacts (incoming < 4:
+0.50 vs 0.67). Recommendation: train on pair contacts (weight the loss on
+steps where the true pair distance < 1.6, sample contact-heavy scenarios).
+
+Implemented as `--contact-weight` (`model.token_losses.contact_mask`: a token
+is up-weighted when its true nearest ball is within 1.6 at the previous or
+target step). v38 = fine-tune soup B for 3000 batches with `--contact-weight
+3.0 --speed-weight 0.3`; v39 = control (same, no contact weight).
