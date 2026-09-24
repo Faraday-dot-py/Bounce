@@ -1,10 +1,15 @@
-"""Spatially tiled sim step for ball counts whose per-token state and
-attention intermediates do not fit on one GPU. Token state (x, y, vx, vy,
-hidden) lives in host memory, one buffer per horizontal strip of the grid;
-each tick streams one strip at a time through the GPU together with a halo of
-the neighbouring strips' tokens within `neighbor_radius` of the boundary, so
-every token sees exactly the neighbours it would in one global step. Tokens
-that cross a strip boundary are handed to the neighbouring strip.
+"""Spatially tiled sim step for ball counts whose attention intermediates
+(~4 KB per ball) do not fit on one GPU. Token state (x, y, vx, vy, hidden)
+stays resident on the device, one buffer per horizontal strip of the grid;
+each tick runs one strip at a time together with a halo of the neighbouring
+strips' tokens within `neighbor_radius` of the boundary, so every token sees
+exactly the neighbours it would in one global step. Tokens that cross a strip
+boundary are handed to the neighbouring strip. Uses the per-destination
+softmax max (see TokenFreeDynamics.local_softmax) so a token's update does
+not depend on the other strips.
+
+`hidden_dtype=torch.float16` halves the resident hidden state (64 vs 128
+bytes per ball) at the cost of rounding it each tick; compute is fp32.
 
 Usage: see scripts/bench_scaling.py.
 """
@@ -12,7 +17,7 @@ import torch
 
 
 class TiledSim:
-    def __init__(self, model, strips, device, slack=1.1, pin=True, track_ids=False):
+    def __init__(self, model, strips, device, slack=1.05, hidden_dtype=torch.float32, track_ids=False):
         self.model = model
         self.model.dynamics.cell_graph = True
         self.model.dynamics.local_softmax = True
@@ -21,11 +26,12 @@ class TiledSim:
         self.rows = self.n / strips
         self.device = device
         self.slack = slack
-        self.pin = pin and device.type == "cuda"
         self.hidden_dim = model.dynamics.hidden_dim
+        self.hidden_dtype = hidden_dtype
         self.track_ids = track_ids
-        self.cols = 4 + self.hidden_dim + (1 if track_ids else 0)
-        self.bufs = [None] * strips
+        self.core_cols = 4 + (1 if track_ids else 0)
+        self.cores = [None] * strips
+        self.hids = [None] * strips
         self.counts = [0] * strips
         self.band_low = [None] * strips
         self.band_high = [None] * strips
@@ -37,20 +43,41 @@ class TiledSim:
     def strip_of(self, x):
         return (x / self.rows).floor().long().clamp(0, self.strips - 1)
 
-    def load(self, strip_states):
-        """strip_states: one (m, cols) device tensor per strip, holding the
-        tokens inside that strip."""
-        for s, state in enumerate(strip_states):
-            cap = max(int(state.shape[0] * self.slack), state.shape[0] + 1024)
-            self.bufs[s] = torch.empty((cap, self.cols), pin_memory=self.pin)
-            self.bufs[s][:state.shape[0]].copy_(state)
-            self.counts[s] = state.shape[0]
-            self.band_low[s], self.band_high[s] = self.bands(state, s)
+    def set_strip(self, s, state):
+        """state: (m, 4 + hidden_dim [+ 1]) fp32 tokens inside strip s."""
+        m = state.shape[0]
+        cap = int(m * self.slack) + 1024
+        self.cores[s] = torch.empty((cap, self.core_cols), device=self.device)
+        self.hids[s] = torch.empty((cap, self.hidden_dim), device=self.device, dtype=self.hidden_dtype)
+        self.counts[s] = 0
+        self.write(s, 0, state)
+        self.band_low[s], self.band_high[s] = self.bands(state, s)
+
+    def write(self, s, start, rows):
+        end = start + rows.shape[0]
+        if end > self.cores[s].shape[0]:
+            cap = int(end * 1.25)
+            core = torch.empty((cap, self.core_cols), device=self.device)
+            hid = torch.empty((cap, self.hidden_dim), device=self.device, dtype=self.hidden_dtype)
+            core[:start] = self.cores[s][:start]
+            hid[:start] = self.hids[s][:start]
+            self.cores[s], self.hids[s] = core, hid
+        hd = self.hidden_dim
+        self.cores[s][start:end, :4] = rows[:, :4]
+        if self.track_ids:
+            self.cores[s][start:end, 4:] = rows[:, 4 + hd:]
+        self.hids[s][start:end] = rows[:, 4:4 + hd].to(self.hidden_dtype)
+        self.counts[s] = end
+
+    def read(self, s):
+        c = self.counts[s]
+        core, hid = self.cores[s][:c], self.hids[s][:c].float()
+        return torch.cat([core[:, :4], hid, core[:, 4:]], dim=1)
 
     def bands(self, state, s):
         x = state[:, 0]
-        return (state[x < self.lo(s) + self.model.dynamics.neighbor_radius],
-                state[x >= self.lo(s + 1) - self.model.dynamics.neighbor_radius])
+        r = self.model.dynamics.neighbor_radius
+        return state[x < self.lo(s) + r], state[x >= self.lo(s + 1) - r]
 
     def load_flat(self, positions, velocities, hidden=None):
         """Splits a flat token set into strips (test / small-N convenience)."""
@@ -60,13 +87,13 @@ class TiledSim:
             cols.append(torch.arange(positions.shape[0], device=positions.device, dtype=torch.float32)[:, None])
         state = torch.cat(cols, dim=1)
         dest = self.strip_of(state[:, 0])
-        self.load([state[dest == s] for s in range(self.strips)])
+        for s in range(self.strips):
+            self.set_strip(s, state[dest == s])
 
     def init_random(self, count, seed):
         """Uniform random positions and velocities (the benchmark start),
         generated strip by strip on the device."""
         n = self.n
-        states = []
         for s in range(self.strips):
             m = count // self.strips + (count % self.strips if s == self.strips - 1 else 0)
             gen = torch.Generator(device=self.device).manual_seed(seed + s)
@@ -76,11 +103,13 @@ class TiledSim:
             cols = [x[:, None], y[:, None], (r[:, 2:4] - 0.5) * 4.6, torch.zeros(m, self.hidden_dim, device=self.device)]
             if self.track_ids:
                 cols.append(torch.zeros(m, 1, device=self.device))
-            states.append(torch.cat(cols, dim=1))
-        self.load(states)
+            self.set_strip(s, torch.cat(cols, dim=1))
 
     def alive(self):
         return sum(self.counts)
+
+    def state_bytes(self):
+        return sum(c.numel() * c.element_size() + h.numel() * h.element_size() for c, h in zip(self.cores, self.hids))
 
     def step(self):
         S = self.strips
@@ -89,7 +118,7 @@ class TiledSim:
         next_low, next_high = [None] * S, [None] * S
         with torch.no_grad():
             for s in range(S):
-                own = self.bufs[s][:self.counts[s]].to(self.device, non_blocking=True)
+                own = self.read(s)
                 m = own.shape[0]
                 parts = [own]
                 if s > 0:
@@ -103,7 +132,7 @@ class TiledSim:
                 if self.track_ids:
                     cols.append(own[:, 4 + hd:])
                 new = torch.cat(cols, dim=1)
-                del nodes, p, v, h, own
+                del nodes, p, v, h, own, cols
                 finite = torch.isfinite(new[:, :4]).all(dim=1)
                 if not bool(finite.all()):
                     new = new[finite]
@@ -117,8 +146,7 @@ class TiledSim:
                 dest = self.strip_of(new[:, 0])
                 stay = dest == s
                 kept = new[stay]
-                self.bufs[s][:kept.shape[0]].copy_(kept, non_blocking=True)
-                self.counts[s] = kept.shape[0]
+                self.write(s, 0, kept)
                 moved = 0
                 for d in (s - 1, s + 1):
                     if 0 <= d < S:
@@ -128,14 +156,12 @@ class TiledSim:
                             incoming[d].append(mig)
                 assert kept.shape[0] + moved == new.shape[0], "token moved more than one strip in a tick"
                 next_low[s], next_high[s] = self.bands(kept, s)
-        for d in range(S):
-            if incoming[d]:
-                mig = torch.cat(incoming[d])
-                c = self.counts[d]
-                assert c + mig.shape[0] <= self.bufs[d].shape[0], "strip buffer overflow; raise slack"
-                self.bufs[d][c:c + mig.shape[0]].copy_(mig, non_blocking=True)
-                self.counts[d] = c + mig.shape[0]
-                lo, hi = self.bands(mig, d)
-                next_low[d] = torch.cat([next_low[d], lo])
-                next_high[d] = torch.cat([next_high[d], hi])
+                del new, kept
+            for d in range(S):
+                if incoming[d]:
+                    mig = torch.cat(incoming[d])
+                    self.write(d, self.counts[d], mig)
+                    lo, hi = self.bands(mig, d)
+                    next_low[d] = torch.cat([next_low[d], lo])
+                    next_high[d] = torch.cat([next_high[d], hi])
         self.band_low, self.band_high = next_low, next_high

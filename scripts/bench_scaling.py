@@ -1,8 +1,8 @@
 """Times the real-time sim step (Sim.step, no spawning) for N balls, one
 row per N: total wall time for --ticks steps, median ms per tick, peak
 memory. Grid side is 10000 up to 1M balls, then 10*sqrt(N) (density 0.01).
-Above --tile-balls the step runs through scripts/tiled_sim.py (host-resident
-state streamed through the GPU strip by strip).
+Above --tile-balls the step runs through scripts/tiled_sim.py (device-resident
+state, processed strip by strip).
 
 Usage:
     PYTHONPATH=. python3 scripts/bench_scaling.py --device cuda --out results/bench_scaling_cuda.json
@@ -41,7 +41,9 @@ def main():
     ap.add_argument("--checkpoint", default="checkpoints/token_model_soup_b.pt")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--grid", type=int, default=0, help="0 = max(10000, 10*sqrt(N))")
-    ap.add_argument("--tile-balls", type=int, default=10_000_000)
+    ap.add_argument("--tile-balls", type=int, default=4_000_000)
+    ap.add_argument("--fp16-hidden-above", type=int, default=600_000_000,
+                    help="store the resident hidden state in fp16 above this many balls (fp32 state no longer fits)")
     ap.add_argument("--ticks", type=int, default=300)
     ap.add_argument("--sizes", type=str, default=None)
     ap.add_argument("--seed", type=int, default=4738)
@@ -57,7 +59,8 @@ def main():
         tiled = count > args.tile_balls
         if tiled:
             strips = math.ceil(count / args.tile_balls)
-            sim = TiledSim(model, strips, device, slack=1.3)
+            sim = TiledSim(model, strips, device,
+                           hidden_dtype=torch.float16 if count > args.fp16_hidden_above else torch.float32)
             warm = make_sim(model, 1000, grid, device, args.seed)
             for _ in range(3):
                 warm.step(None)
@@ -88,7 +91,8 @@ def main():
                "alive": alive,
                "peak_mem_mb": (torch.cuda.max_memory_allocated() / 2 ** 20 if device.type == "cuda"
                                else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024),
-               "host_state_gb": count * 4 * (4 + 32) / 2 ** 30 if tiled else 0.0}
+               "hidden_dtype": str(sim.hidden_dtype).split(".")[-1] if tiled else "float32",
+               "resident_state_gb": sim.state_bytes() / 2 ** 30 if tiled else count * 4 * 36 / 2 ** 30}
         rows.append(row)
         print(json.dumps(row), flush=True)
         if args.out:
