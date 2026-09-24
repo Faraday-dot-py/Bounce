@@ -2416,3 +2416,14 @@ halves the training-set unroll loss, but the eval gap is small: steps
 so per-step error there mostly reflects init/short-horizon error, not model
 quality. Energy retention is the best of the series but still ~50-55% of
 truth speed.
+
+Unbiased subagent frame review, v24 vs v21 (seeds 4738, 4739, steps 0-30, no
+hypothesis primed): both models match truth almost cell for cell through step
+3; both then drift toward lower positions than truth with more mass on the
+bottom row, and neither reproduces ball identities past step ~12. v24 keeps
+somewhat more separated single blobs and a few balls high in the frame at
+steps 16-20 (seed 4738: one high at step 20, seed 4739: one at mid-height at
+step 16); v21 shows more horizontal smearing along the bottom row (steps 8,
+30) and blobs stacked at the left edge (seed 4739, steps 16-20). One v24
+artifact: seed 4738 step 5 has the two centre balls merged into a dim 2x2
+smudge. Grids: scratchpad `g_v{21,24}_{4738,4739}.png`.
