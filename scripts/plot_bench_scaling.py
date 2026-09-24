@@ -1,5 +1,7 @@
-"""Plots results/bench_scaling_{cuda,cpu}.json: total time for the tick run
-and per-ball cost vs ball count, with an O(N) reference line.
+"""Plots results/bench_scaling_{cuda,big}.json merged into one curve: total
+time for the tick run, per-ball cost and peak GPU memory vs ball count, with
+an O(N) reference line. Tiled points (host-of-strips path) are drawn as
+squares.
 
 Usage:
     PYTHONPATH=. python3 scripts/plot_bench_scaling.py --out results/bench_scaling.png
@@ -16,39 +18,43 @@ import matplotlib.pyplot as plt
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--inputs", nargs="+", default=["results/bench_scaling_cuda.json"])
+    ap.add_argument("--inputs", nargs="+", default=["results/bench_scaling_cuda.json", "results/bench_scaling_big.json"])
     ap.add_argument("--out", default="results/bench_scaling.png")
     args = ap.parse_args()
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+    rows = []
     for path in args.inputs:
-        if not os.path.exists(path):
-            continue
-        rows = json.load(open(path))
-        label = rows[0]["device"]
-        n = [r["balls"] for r in rows]
-        axes[0].plot(n, [r["total_s"] for r in rows], "o-", label=label)
-        axes[1].plot(n, [r["median_ms"] * 1000 / r["balls"] for r in rows], "o-", label=label)
-        axes[2].plot(n, [r["peak_mem_mb"] for r in rows], "o-", label=label)
-        for x, r in zip(n, rows):
-            axes[0].annotate(f"{r['total_s']:.2g}s", (x, r["total_s"]), textcoords="offset points", xytext=(0, 6),
-                             ha="center", fontsize=7)
-    ref = [10, 1_000_000]
-    first = json.load(open([p for p in args.inputs if os.path.exists(p)][0]))
-    anchor = first[-1]["total_s"] / first[-1]["balls"]
-    axes[0].plot(ref, [anchor * x for x in ref], "k--", lw=0.8, label="O(N) through 1M point")
-    axes[0].set_title(f"Total time for {first[0]['ticks']} ticks (grid {first[0]['grid']}^2)")
-    axes[0].set_ylabel("seconds")
-    axes[1].set_title("Median cost per ball per tick")
-    axes[1].set_ylabel("microseconds / ball")
-    axes[2].set_title("Peak memory (GPU alloc / CPU RSS)")
-    axes[2].set_ylabel("MB")
-    for ax in axes:
+        if os.path.exists(path):
+            rows += json.load(open(path))
+    rows.sort(key=lambda r: r["balls"])
+    n = [r["balls"] for r in rows]
+    tiled = [r.get("tiled", False) for r in rows]
+
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5))
+    series = [
+        ([r["total_s"] for r in rows], "seconds", f"Total time for {rows[0]['ticks']} ticks"),
+        ([r["median_ms"] * 1000 / r["balls"] for r in rows], "microseconds / ball", "Median cost per ball per tick"),
+        ([r["peak_mem_mb"] / 1024 for r in rows], "GB", "Peak GPU memory allocated"),
+    ]
+    for ax, (y, label, title) in zip(axes, series):
+        ax.plot(n, y, "-", color="C0")
+        ax.plot([a for a, t in zip(n, tiled) if not t], [b for b, t in zip(y, tiled) if not t], "o", color="C0",
+                label="single pass")
+        ax.plot([a for a, t in zip(n, tiled) if t], [b for b, t in zip(y, tiled) if t], "s", color="C1", label="tiled")
+        ax.set_title(title)
+        ax.set_ylabel(label)
+        ax.set_xlabel("balls")
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("balls")
         ax.grid(True, which="both", alpha=0.3)
-        ax.legend()
+    for x, r in zip(n, rows):
+        axes[0].annotate(f"{r['total_s']:.3g}s", (x, r["total_s"]), textcoords="offset points", xytext=(0, 6),
+                         ha="center", fontsize=7)
+    anchor = rows[-1]["total_s"] / rows[-1]["balls"]
+    axes[0].plot([n[0], n[-1]], [anchor * n[0], anchor * n[-1]], "k--", lw=0.8, label="O(N) through last point")
+    axes[0].legend()
+    axes[1].legend()
+    fig.suptitle("Real-time sim step scaling on one H200 (grid 10000^2 up to 1M balls, then 10*sqrt(N)^2 = density 0.01)")
     fig.tight_layout()
     fig.savefig(args.out, dpi=130)
     print("wrote", args.out)
