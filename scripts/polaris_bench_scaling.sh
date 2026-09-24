@@ -11,6 +11,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 cd "$HOME/bounce"
 export PYTHONPATH=.
+pip install -q -r requirements.txt
 
 nproc
 nvidia-smi -L
