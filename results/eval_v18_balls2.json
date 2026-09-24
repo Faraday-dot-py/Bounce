@@ -1,0 +1,19 @@
+{
+  "checkpoint": "checkpoints/token_model_h24_v18.pt",
+  "mode": "free",
+  "n": 20,
+  "num_balls": 2,
+  "num_seeds": 48,
+  "num_steps": 100,
+  "mean_position_error": {
+    "1": 0.4376671612262726,
+    "5": 1.1308039426803589,
+    "10": 1.856661319732666,
+    "20": 3.6946372985839844,
+    "50": 7.019204616546631,
+    "100": 8.191813468933105
+  },
+  "identity_swaps": 52,
+  "token_count_mismatch_seeds": [],
+  "faded_token_fraction": 0.0
+}

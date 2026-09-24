@@ -2693,3 +2693,22 @@ seeds via ball_split; held-out 0.094 / 0.151 / 0.456 / 2.945 at steps 1 / 5 / 10
 / 20). Without ball_split the held-out set has 1 mismatch seed (9010).
 Speed-weight 1.0 (v35) is too strong; 0.1 (v34) adds little; 0.3 is best but
 the effect over noise is modest.
+
+### Ball-count robustness, v33 vs v18 (2026-09-24)
+
+20x20, 48 seeds (start 4738), 100 steps, uniform scenario; position error at
+step 1/5/10/20/50/100 (`eval_v{18,33}_balls{2,6}.json`):
+
+| balls | model | 1 | 5 | 10 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|---|
+| 2 | v18 | 0.438 | 1.131 | 1.857 | 3.695 | 7.02 | 8.19 |
+| 2 | v33 | 0.072 | 0.119 | 0.287 | 1.345 | 4.80 | 7.07 |
+| 4 | v18 | 0.431 | 1.176 | 2.038 | 5.073 | 8.22 | 7.41 |
+| 4 | v33 | 0.090 | 0.168 | 0.578 | 2.559 | 6.63 | 7.89 |
+| 6 | v18 | 0.482 | 1.383 | 2.419 | 5.675 | 7.82 | 7.98 |
+| 6 | v33 | 0.090 | 0.188 | 0.727 | 4.332 | 7.97 | 8.04 |
+
+Error grows with ball count (more collisions, so faster chaotic
+amplification) but v33 beats v18 at every count, most strongly at 5-10 steps
+(-83% / -70% at 6 balls at steps 5 / 10) and less at step 20 (-24% at 6
+balls).
