@@ -1947,3 +1947,89 @@ this line stays parked.
 Checkpoints and videos: `checkpoints/token_model_h12_v15.pt`,
 `videos/token_model_v15_diagnostic_grid.png`,
 `videos/token_model_v15_rollout.mp4`.
+
+## 2026-09-23 (21:06) — v17 (track-query attention, job 2873): near-parity with v9, and a structurally different failure mode from the whole masking family
+
+`token_model_h12_v17.pt` (job 2873, Polaris): identical recipe to
+v9/v15 (state-loss-only ablation, `--dataset-cache
+checkpoints/token_dataset_10000_h12_seed4738.pt`, 3 epochs, ramp-epochs
+2) plus `--track-query` -- the two-stage self-/cross-attention
+architecture designed in
+`docs/superpowers/specs/2026-09-23-token-track-query-design.md`, which
+replaces `occluding_mask`/`centroid_near`/blending entirely for this
+path instead of tuning that structure further (v10-v12) or adding a
+hard mask on top of it (v13-v15).
+
+**Implementation bug found and fixed before this run produced a valid
+checkpoint.** The first submission (job 2868) crashed at epoch 0, batch
+6800 with `RuntimeError: element 0 of tensors does not require grad and
+does not have a grad_fn`. Root cause: `TrackQueryDynamics.forward`'s
+zero-token early return built its output tensors via bare
+`positions.new_zeros(...)`/`hidden.new_zeros(...)`, bypassing
+`gru`/`delta_head` entirely -- unlike `TokenDynamics`, which always
+routes its zero-token output through both regardless of token count and
+so always keeps a `grad_fn`. Any training batch whose rollout sample had
+zero detected tokens at every step (rare but not impossible with this
+dataset's 2-6 ball range) produced a total loss with no gradient path,
+which crashed `loss.backward()`. Fixed by letting `n==0` flow through
+the same self-attention/cross-attention/gru/delta_head path as every
+other token count, only special-casing the `torch.stack`-on-empty-list
+crash for the cross-attention loop itself (commit `b0af379`). Neither
+the design's own review-focus tests nor the final code review's manual
+n=0 probe caught this -- both checked shapes and NaN-freedom, not
+gradient-graph connectivity under an actual training loss. Resubmitted
+as job 2873, completed cleanly (26 min, no further errors).
+
+**v17 result: 4/48 dropout** (ball breakdown `{1: 2, 2: 1, 3: 1}`) --
+just above v9's unmasked baseline of 3/48, technically not a win against
+the design's stated primary success criterion ("dropout count below
+v9's 3/48"), but dramatically better than every prior structural fix
+attempt this investigation tried: v13 (34/48), v14 (66/48), v15
+(16/48). At 48 seeds the 3-vs-4 gap is not distinguishable from noise on
+its own.
+
+**Unbiased subagent review of the diagnostic grid**
+(`videos/token_model_v17_diagnostic_grid.png`, no hypothesis primed):
+tracks closely with ground truth through step 3, starts diverging by
+step 5, and by step 20 shows objects "drifting to different positions
+than ground truth and appearing to sit closer together or partially
+overlapping compared to the more spread-out ground-truth layout, with
+colors... staying consistent throughout rather than fading" -- no
+checkerboarding, no color bleeding, no merging. This is a *different
+failure shape* from the entire v13-v15 masking family, whose defining
+symptom in every case was color-blending/identity-theft at close
+approach. v17's failure looks like plain positional drift compounding
+over the rollout, colors and identity staying intact -- consistent with
+what v16 (memory: "v16 verified 0/16 dropout, positional drift not
+identity dropout") had already suggested about this architecture line
+in an earlier, narrower probe.
+
+**Attention-weight trace** (`scripts/visualize_track_query_attention.py`,
+seed 4754, the ball-1 dropout case): ground-truth error on the failing
+token was already 4-5 cells by step 7-12 -- well before the step-19
+dropout threshold -- with a brief partial recovery at step 17 (error
+0.79) before `BAILOUT` (empty cross-attention window at every expansion)
+at step 18. Cross-attention weights stayed diffuse throughout the whole
+trace, on every token, not just the failing one (max softmax weight
+typically 0.05-0.3, rarely above 0.4) -- consistent with an
+undertrained model (3 epochs, state-loss-only, same recipe as every
+other checkpoint in this investigation) rather than a structurally
+incapable one.
+
+**Read: track-query is a structurally sound alternative that resolves
+the identity-blending failure mode entirely, but hasn't yet matched v9
+on raw dropout count at this recipe.** Every masking-family variant
+(v13-v15) traded one failure mode (give-up dropout) for another
+(color-bleed/identity-theft); track-query instead fails the same way
+v9 does (positional drift, no identity confusion) just slightly more
+often at this training budget. Given the diffuse attention weights
+observed above, more training (this recipe is 3 epochs / state-loss-only
+across the whole investigation, never the project's 50-epoch default)
+is the most likely lever, not another architectural change. Flagging for
+a human decision on whether to invest in a longer track-query training
+run to see if it closes or crosses the 3/48 gap, or treat this result as
+sufficient evidence the architecture direction is sound and stop here.
+
+Checkpoints and videos: `checkpoints/token_model_h12_v17.pt`,
+`videos/token_model_v17_diagnostic_grid.png`,
+`videos/token_model_v17_rollout.mp4`.
