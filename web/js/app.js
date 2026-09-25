@@ -1,9 +1,9 @@
-import { loadWeights } from "./model.js?v=a32c277a1d";
-import { Sim } from "./sim.js?v=a32c277a1d";
-import { Physics } from "./physics.js?v=a32c277a1d";
-import { Scene } from "./scene.js?v=a32c277a1d";
-import { fmt } from "./arch.js?v=a32c277a1d";
-import { forceLut, drawPair, drawWall, drawEnergy } from "./plots.js?v=a32c277a1d";
+import { loadWeights } from "./model.js?v=503b315002";
+import { Sim } from "./sim.js?v=503b315002";
+import { Physics } from "./physics.js?v=503b315002";
+import { Scene } from "./scene.js?v=503b315002";
+import { fmt } from "./arch.js?v=503b315002";
+import { forceLut, drawPair, drawWall, drawEnergy } from "./plots.js?v=503b315002";
 
 const $ = (id) => document.getElementById(id);
 const H = 32, SWEEP = 900, HIST = 300;

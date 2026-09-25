@@ -5,7 +5,7 @@
 
 const H = 32;
 const W = 64;
-const VQ = "?v=a32c277a1d";
+const VQ = "?v=503b315002";
 
 export async function loadWeights(base = "weights") {
   const [manifest, buf] = await Promise.all([

@@ -43,12 +43,6 @@ with sync_playwright() as p:
 
     pg.evaluate("window.__bounce.camera('arch')"); time.sleep(1.5)
     cells = pg.evaluate(JS_CELLS)
-    neg = [c for c in cells if c["v"] < -0.05]
-    pos = [c for c in cells if c["v"] > 0.05]
-    base = lambda c: c["s"] * 1.4 * 1.2 + 0.01 * c["s"]
-    check("negative cubes exist", len(neg) > 0, len(neg))
-    check("negative cubes lie below baseline", all(c["y"] < base(c) - 1e-6 and c["y"] + c["sy"] <= base(c) + 0.08 * c["s"] + 1e-6 for c in neg))
-    check("positive cubes start at baseline and rise", all(abs(c["y"] - base(c)) < 1e-6 and c["y"] + c["sy"] > base(c) for c in pos))
 
     grav = [i for i, c in enumerate(cells) if c["par"] and c["par"][0] == "gravity"]
     pg.evaluate("window.__bounce.view.goal = null")

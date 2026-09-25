@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 export const MAXE = 6;
-const CAP = 1800, MAXW = 400, VMAX = 1.2;
+const CAP = 1800, MAXW = 400;
 const WALLS = ["x = 0", "x = 99", "y = 0", "y = 99"];
 
 export function divColor(t, c, k = 1) {
@@ -72,7 +72,7 @@ export class Arch {
       if (nw >= MAXW) return;
       this.wirePos.set([u0, 0.05, w0, u1, 0.05, w1], 6 * nw++);
     };
-    const cell = (u, w, s, v, name, val, dim = false, par = null) => C.push({ u, w, s, v, name, val, dim, par, h: s * 1.4 * Math.max(-VMAX, Math.min(VMAX, v || 0)) });
+    const cell = (u, w, s, v, name, val, dim = false, par = null) => C.push({ u, w, s, v, name, val, dim, par, h: s * (0.3 + 1.4 * Math.abs(v)) });
     const lab = (text, u, w, cls = "", left = false) => L.push({ text, u, w, cls, left });
     const vec = (u, w, s, gap, a, sc, name, unit = 1) => {
       cell(u, w, s, sc(a[0] / unit), name + " x", fmt(a[0]));
@@ -184,9 +184,8 @@ export class Arch {
       const e = C[i];
       const b = front < 0 ? 0 : Math.exp(-(((e.w - front) / 3) ** 2));
       const k = 1 + 1.2 * b + (i === this.hover ? 1.5 : 0);
-      const z0 = e.s * 1.4 * VMAX, z = Math.max(e.h * (1 + 0.8 * b), -z0);
-      m.makeScale(e.s, Math.abs(z) + 0.08 * e.s, e.s);
-      m.setPosition(e.u, z0 + 0.01 * e.s + Math.min(z, 0), e.w);
+      m.makeScale(e.s, e.h * (1 + 0.8 * b) + 0.02, e.s);
+      m.setPosition(e.u, 0, e.w);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, e.dim ? c.setRGB(0.1 * k, 0.13 * k, 0.19 * k) : divColor(e.v, c, k));
     }
