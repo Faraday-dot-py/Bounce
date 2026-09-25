@@ -380,7 +380,7 @@ function panel() {
   const v2 = (a) => `(${fmt(a[0])}, ${fmt(a[1])})`;
   $("sel-id").textContent = tr ? `#${st.selected}` : "";
   $("sel").innerHTML = tr
-    ? [["pos", v2(tr.pos)], ["vel", v2(tr.vel)], ["dp", v2(tr.dp)], ["dv", v2(tr.dv)], ["nbrs", tr.edges.length], ["contacts", tr.edges.filter((e) => e.contact).length], ["walls", tr.wall.filter((w) => w.pen > 0).length]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("")
+    ? `pos <b>${v2(tr.pos)}</b><br>vel <b>${v2(tr.vel)}</b><br>neighbours <b>${tr.edges.length}</b> · contacts <b>${tr.edges.filter((e) => e.contact).length}</b> · walls <b>${tr.wall.filter((w) => w.pen > 0).length}</b><br>dp <b>${v2(tr.dp)}</b><br>dv <b>${v2(tr.dv)}</b>`
     : "no balls";
   drawPair($("c-pair"), lut, tr);
   drawWall($("c-wall"), lut, tr);
