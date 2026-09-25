@@ -1,9 +1,10 @@
-// From-scratch port of TokenFreeDynamics._core + TokenModel.step_free
-// (model/token_free.py, model/token_model.py): cell graph, global-max softmax.
+// From-scratch port of TokenFreeDynamics(conservative_contact=True) +
+// TokenModel.step_free (model/token_free.py, model/token_model.py): learned
+// distance-only pair force and wall force, learned uniform acceleration,
+// velocity-Verlet substeps.
 
 const H = 32;
-const NODE = 46;
-const WALL = 12;
+const W = 64;
 
 export async function loadWeights(base = "weights") {
   const [manifest, buf] = await Promise.all([
@@ -23,314 +24,207 @@ export function parseWeights(manifest, buf) {
   return { w, config: manifest.config, checkpoint: manifest.checkpoint };
 }
 
-const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+class RadialMlp {
+  constructor(w, prefix) {
+    this.W0 = w[prefix + ".0.weight"]; this.b0 = w[prefix + ".0.bias"];
+    this.W1 = w[prefix + ".2.weight"]; this.b1 = w[prefix + ".2.bias"];
+    this.W2 = w[prefix + ".4.weight"]; this.b2 = w[prefix + ".4.bias"][0];
+    this.h1 = new Float64Array(W);
+    this.h2 = new Float64Array(W);
+  }
+
+  // scalar in, scalar out; hidden activations are left in this.h1 / this.h2
+  eval(x) {
+    const { W0, b0, W1, b1, W2, h1, h2 } = this;
+    for (let a = 0; a < W; a++) h1[a] = Math.tanh(W0[a] * x + b0[a]);
+    let out = this.b2;
+    for (let a = 0; a < W; a++) {
+      let s = b1[a];
+      const o = a * W;
+      for (let b = 0; b < W; b++) s += W1[o + b] * h1[b];
+      h2[a] = Math.tanh(s);
+      out += W2[a] * h2[a];
+    }
+    return out;
+  }
+}
 
 export class TokenNet {
   constructor({ w, config }) {
-    this.w = w;
     this.cfg = config;
+    this.pairMlp = new RadialMlp(w, "pair_force");
+    this.wallMlp = new RadialMlp(w, "wall_force");
+    this.gx = w.gravity[0] * 10;
+    this.gy = w.gravity[1] * 10;
     this.cap = 0;
     this.grow(64);
-    this.edgeCap = 0;
-    this.growEdges(512);
-    this.cellSide = config.neighbor_radius;
   }
 
   grow(n) {
     if (n <= this.cap) return;
     this.cap = n;
-    this.ns = new Float64Array(n * NODE);
-    this.q = new Float64Array(n * H);
-    this.kNode = new Float64Array(n * H);
-    this.vNode = new Float64Array(n * H);
-    this.attn = new Float64Array(n * H);
-    this.delta = new Float64Array(n * 4);
-    this.dstStart = new Int32Array(n + 1);
-    this.walls = new Float64Array(n * WALL);
-    this.cellKey = new Int32Array(n);
-    this.order = new Int32Array(n);
+    this.px = new Float64Array(2 * n);
+    this.vx = new Float64Array(2 * n);
+    this.a = new Float64Array(2 * n);
+    this.aWall = new Float64Array(2 * n);
+    this.aPair = new Float64Array(2 * n);
+    this.next = new Int32Array(n);
+    this.cellKey = new Float64Array(n);
   }
 
-  growEdges(e) {
-    if (e <= this.edgeCap) return;
-    this.edgeCap = e;
-    this.src = new Int32Array(e);
-    this.dst = new Int32Array(e);
-    this.score = new Float64Array(e);
-    this.weight = new Float64Array(e);
-  }
-
-  wallFeatures(pos, vel, i, out) {
-    const { n, wall_range: wr, radius, dt } = this.cfg;
-    const x = pos[2 * i], y = pos[2 * i + 1];
-    const d = [x, n - 1 - x, y, n - 1 - y];
-    for (let a = 0; a < 4; a++) out[a] = (wr - Math.min(Math.max(d[a], 0), wr)) / wr;
-    const x2 = x + vel[2 * i] * dt, y2 = y + vel[2 * i + 1] * dt;
-    const d2 = [x2, n - 1 - x2, y2, n - 1 - y2];
-    for (let a = 0; a < 4; a++) {
-      out[4 + a] = Math.max(radius - d[a], 0) / radius;
-      out[8 + a] = Math.max(radius - d2[a], 0) / radius;
-    }
-  }
-
-  buildGraph(pos, count) {
-    const R = this.cfg.neighbor_radius;
-    const side = this.cellSide;
-    let minX = Infinity, minY = Infinity, maxY = -Infinity;
-    const cx = new Int32Array(count), cy = new Int32Array(count);
+  // pairs within `radius` (dist <= radius, as build_radius_graph), each
+  // unordered pair once, calling visit(i, j, dist, dx, dy) with d = pos[i] - pos[j]
+  forPairs(pos, count, radius, visit) {
+    const next = this.next, keys = this.cellKey;
+    const heads = new Map();
     for (let i = 0; i < count; i++) {
-      cx[i] = Math.floor(pos[2 * i] / side);
-      cy[i] = Math.floor(pos[2 * i + 1] / side);
-      if (cx[i] < minX) minX = cx[i];
-      if (cy[i] < minY) minY = cy[i];
-      if (cy[i] > maxY) maxY = cy[i];
+      const x = pos[2 * i], y = pos[2 * i + 1];
+      if (!(Number.isFinite(x) && Number.isFinite(y))) { keys[i] = NaN; continue; }
+      const cx = Math.min(Math.max(Math.floor(x / radius), -1000), 1000);
+      const cy = Math.min(Math.max(Math.floor(y / radius), -1000), 1000);
+      const k = (cx + 1024) * 4096 + cy + 1024;
+      keys[i] = k;
+      next[i] = heads.has(k) ? heads.get(k) : -1;
+      heads.set(k, i);
     }
-    const stride = maxY - minY + 3;
-    const keys = this.cellKey;
-    for (let i = 0; i < count; i++) keys[i] = (cx[i] - minX + 1) * stride + (cy[i] - minY + 1);
-    const order = Array.from({ length: count }, (_, i) => i).sort((a, b) => keys[a] - keys[b]);
-    const buckets = new Map();
-    for (const i of order) {
-      const b = buckets.get(keys[i]);
-      if (b) b.push(i); else buckets.set(keys[i], [i]);
-    }
-    let e = 0;
     for (let i = 0; i < count; i++) {
-      this.dstStart[i] = e;
+      const k = keys[i];
+      if (k !== k) continue;
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
-          const b = buckets.get(keys[i] + dx * stride + dy);
-          if (!b) continue;
-          for (const j of b) {
-            if (j === i) continue;
-            const ddx = pos[2 * j] - pos[2 * i], ddy = pos[2 * j + 1] - pos[2 * i + 1];
-            if (Math.sqrt(ddx * ddx + ddy * ddy + 1e-12) > R) continue;
-            if (e + 2 > this.edgeCap) this.growEdges(this.edgeCap * 2);
-            this.src[e] = j;
-            this.dst[e] = i;
-            e++;
+          const h = heads.get(k + dx * 4096 + dy);
+          if (h === undefined) continue;
+          for (let j = h; j >= 0; j = next[j]) {
+            if (j <= i) continue;
+            const rx = pos[2 * i] - pos[2 * j], ry = pos[2 * i + 1] - pos[2 * j + 1];
+            const d = Math.sqrt(rx * rx + ry * ry + 1e-12);
+            if (d <= radius) visit(i, j, d, rx, ry);
           }
         }
       }
-      if (e + 1 > this.edgeCap) this.growEdges(this.edgeCap * 2);
-      this.src[e] = i;
-      this.dst[e] = i;
-      e++;
     }
-    this.dstStart[count] = e;
-    return e;
   }
 
-  // One step; writes results into pos/vel/hidden in place. `traceIdx` >= 0
-  // returns the full activation record for that ball.
-  step(pos, vel, hidden, count, traceIdx = -1) {
-    const { w, cfg } = this;
-    const { dt, radius } = cfg;
-    this.grow(count);
-    const ns = this.ns, walls = this.walls;
+  // TokenFreeDynamics.contact_accel; rec = {wall, pair} optionally receives the components
+  accel(p, count, a, rec = null) {
+    const { n, radius, force_scale: fs } = this.cfg;
+    const wall = rec ? rec.wall : null, pair = rec ? rec.pair : null;
     for (let i = 0; i < count; i++) {
-      const o = i * NODE;
-      ns[o] = vel[2 * i];
-      ns[o + 1] = vel[2 * i + 1];
-      const wo = i * WALL;
-      this.wallFeatures(pos, vel, i, walls.subarray(wo, wo + WALL));
-      for (let a = 0; a < WALL; a++) ns[o + 2 + a] = walls[wo + a];
-      for (let a = 0; a < H; a++) ns[o + 14 + a] = hidden[i * H + a];
-    }
-    const Wq = w["query.weight"], bq = w["query.bias"];
-    const Wk = w["key.weight"], bk = w["key.bias"];
-    const Wv = w["value.weight"], bv = w["value.bias"];
-    const { q, kNode, vNode } = this;
-    for (let i = 0; i < count; i++) {
-      const o = i * NODE;
-      for (let a = 0; a < H; a++) {
-        let sq = bq[a], sk = bk[a], sv = bv[a];
-        for (let b = 0; b < NODE; b++) {
-          const x = ns[o + b];
-          sq += Wq[a * NODE + b] * x;
-          sk += Wk[a * (NODE + 2) + b] * x;
-          sv += Wv[a * (NODE + 2) + b] * x;
-        }
-        q[i * H + a] = sq;
-        kNode[i * H + a] = sk;
-        vNode[i * H + a] = sv;
-      }
-    }
-
-    const E = this.buildGraph(pos, count);
-    const { src, dst, score, weight, attn } = this;
-    const inv = 1 / Math.sqrt(H);
-    let gmax = -Infinity;
-    for (let e = 0; e < E; e++) {
-      const s = src[e], d = dst[e];
-      const rx = pos[2 * s] - pos[2 * d], ry = pos[2 * s + 1] - pos[2 * d + 1];
-      let sc = 0;
-      for (let a = 0; a < H; a++) {
-        const k = kNode[s * H + a] + Wk[a * (NODE + 2) + NODE] * rx + Wk[a * (NODE + 2) + NODE + 1] * ry;
-        sc += q[d * H + a] * k;
-      }
-      score[e] = sc * inv;
-      if (score[e] > gmax) gmax = score[e];
-    }
-    attn.fill(0, 0, count * H);
-    for (let i = 0; i < count; i++) {
-      let denom = 0;
-      const e0 = this.dstStart[i], e1 = this.dstStart[i + 1];
-      for (let e = e0; e < e1; e++) {
-        weight[e] = Math.exp(score[e] - gmax);
-        denom += weight[e];
-      }
-      denom = Math.max(denom, 1e-6);
-      for (let e = e0; e < e1; e++) {
-        weight[e] /= denom;
-        const s = src[e];
-        const rx = pos[2 * s] - pos[2 * i], ry = pos[2 * s + 1] - pos[2 * i + 1];
-        for (let a = 0; a < H; a++) {
-          const v = vNode[s * H + a] + Wv[a * (NODE + 2) + NODE] * rx + Wv[a * (NODE + 2) + NODE + 1] * ry;
-          attn[i * H + a] += weight[e] * v;
-        }
-      }
-    }
-
-    // GRU + heads
-    const Wih = w["gru.weight_ih"], Whh = w["gru.weight_hh"], bih = w["gru.bias_ih"], bhh = w["gru.bias_hh"];
-    const Wd = w["delta_head.weight"], bd = w["delta_head.bias"];
-    const W1 = w["wall_head.0.weight"], b1 = w["wall_head.0.bias"], W2 = w["wall_head.2.weight"], b2 = w["wall_head.2.bias"];
-    const delta = this.delta;
-    const newHidden = new Float32Array(count * H);
-    const rr = new Float64Array(H), zz = new Float64Array(H), nn = new Float64Array(H), hn = new Float64Array(H);
-    const wh = new Float64Array(H);
-    let trace = null;
-    for (let i = 0; i < count; i++) {
-      for (let a = 0; a < H; a++) {
-        let ir = bih[a], iz = bih[H + a], inn = bih[2 * H + a];
-        let hr = bhh[a], hz = bhh[H + a], hnn = bhh[2 * H + a];
-        for (let b = 0; b < H; b++) {
-          const x = attn[i * H + b], h = hidden[i * H + b];
-          ir += Wih[a * H + b] * x;
-          iz += Wih[(H + a) * H + b] * x;
-          inn += Wih[(2 * H + a) * H + b] * x;
-          hr += Whh[a * H + b] * h;
-          hz += Whh[(H + a) * H + b] * h;
-          hnn += Whh[(2 * H + a) * H + b] * h;
-        }
-        const r = sigmoid(ir + hr), z = sigmoid(iz + hz);
-        const n = Math.tanh(inn + r * hnn);
-        rr[a] = r; zz[a] = z; nn[a] = n;
-        hn[a] = (1 - z) * n + z * hidden[i * H + a];
-        newHidden[i * H + a] = hn[a];
-      }
+      const x = p[2 * i], y = p[2 * i + 1];
+      const d = [x, n - 1 - x, y, n - 1 - y];
+      const f = [0, 0, 0, 0];
       for (let c = 0; c < 4; c++) {
-        let s = bd[c];
-        for (let a = 0; a < H; a++) s += Wd[c * H + a] * hn[a];
-        delta[i * 4 + c] = s;
+        const pen = Math.max(radius - d[c], 0) / radius;
+        if (pen > 0) f[c] = pen * this.wallMlp.eval(pen) * fs;
       }
-      // wall head on [velocity, wall features]
-      for (let a = 0; a < H; a++) {
-        let s = b1[a];
-        s += W1[a * 14] * vel[2 * i] + W1[a * 14 + 1] * vel[2 * i + 1];
-        for (let b = 0; b < WALL; b++) s += W1[a * 14 + 2 + b] * walls[i * WALL + b];
-        wh[a] = s > 0 ? s : 0;
-      }
-      const wallOut = [0, 0, 0, 0];
-      for (let c = 0; c < 4; c++) {
-        let s = b2[c];
-        for (let a = 0; a < H; a++) s += W2[c * H + a] * wh[a];
-        wallOut[c] = s;
-        delta[i * 4 + c] += s;
-      }
-      if (i === traceIdx) {
-        trace = {
-          i, ns: Float64Array.from(ns.subarray(i * NODE, (i + 1) * NODE)),
-          q: Float64Array.from(q.subarray(i * H, (i + 1) * H)),
-          attnOut: Float64Array.from(attn.subarray(i * H, (i + 1) * H)),
-          r: Float64Array.from(rr), z: Float64Array.from(zz), n: Float64Array.from(nn),
-          hNew: Float64Array.from(hn),
-          deltaHead: Float64Array.from(delta.subarray(i * 4, i * 4 + 4)).map((v, c) => v - wallOut[c]),
-          wallHidden: Float64Array.from(wh), wallOut: Float64Array.from(wallOut),
-          edges: [], pairSum: [0, 0, 0, 0], gmax,
-        };
-        const e0 = this.dstStart[i], e1 = this.dstStart[i + 1];
-        for (let e = e0; e < e1; e++) {
-          const s = src[e];
-          const rx = pos[2 * s] - pos[2 * i], ry = pos[2 * s + 1] - pos[2 * i + 1];
-          const k = new Float64Array(H), v = new Float64Array(H);
-          for (let a = 0; a < H; a++) {
-            k[a] = kNode[s * H + a] + Wk[a * (NODE + 2) + NODE] * rx + Wk[a * (NODE + 2) + NODE + 1] * ry;
-            v[a] = vNode[s * H + a] + Wv[a * (NODE + 2) + NODE] * rx + Wv[a * (NODE + 2) + NODE + 1] * ry;
-          }
-          trace.edges.push({ src: s, self: s === i, score: score[e], weight: weight[e], k, v, rel: [rx, ry] });
-        }
-      }
+      const wx = f[0] - f[1], wy = f[2] - f[3];
+      a[2 * i] = wx + this.gx;
+      a[2 * i + 1] = wy + this.gy;
+      if (rec) { wall[2 * i] = wx; wall[2 * i + 1] = wy; pair[2 * i] = 0; pair[2 * i + 1] = 0; }
     }
-
-    // pair head: antisymmetric impulse summed over neighbours (pair edges exclude self loops)
-    const P0 = w["pair_head.0.weight"], pb0 = w["pair_head.0.bias"];
-    const P2 = w["pair_head.2.weight"], pb2 = w["pair_head.2.bias"];
-    const P4 = w["pair_head.4.weight"], pb4 = w["pair_head.4.bias"];
     const cd = 2 * radius;
-    const f = new Float64Array(5), a1 = new Float64Array(H), a2 = new Float64Array(H);
-    for (let i = 0; i < count; i++) {
-      for (let e = this.dstStart[i]; e < this.dstStart[i + 1]; e++) {
-        const s = src[e];
-        if (s === i) continue;
-        const rpx = pos[2 * i] - pos[2 * s], rpy = pos[2 * i + 1] - pos[2 * s + 1];
-        const rvx = vel[2 * i] - vel[2 * s], rvy = vel[2 * i + 1] - vel[2 * s + 1];
-        const d = Math.sqrt(rpx * rpx + rpy * rpy + 1e-12);
-        const ux = rpx / d, uy = rpy / d;
-        const ns_ = rvx * ux + rvy * uy;
-        const tx = rvx - ns_ * ux, ty = rvy - ns_ * uy;
-        const nx = rpx + rvx * dt, ny = rpy + rvy * dt;
-        const dNext = Math.sqrt(nx * nx + ny * ny + 1e-12);
-        f[0] = d;
-        f[1] = ns_;
-        f[2] = Math.sqrt(tx * tx + ty * ty + 1e-12);
-        f[3] = Math.max(cd - d, 0) / cd;
-        f[4] = Math.max(cd - dNext, 0) / cd;
-        for (let a = 0; a < H; a++) {
-          let s1 = pb0[a];
-          for (let b = 0; b < 5; b++) s1 += P0[a * 5 + b] * f[b];
-          a1[a] = s1 > 0 ? s1 : 0;
-        }
-        for (let a = 0; a < H; a++) {
-          let s2 = pb2[a];
-          for (let b = 0; b < H; b++) s2 += P2[a * H + b] * a1[b];
-          a2[a] = s2 > 0 ? s2 : 0;
-        }
-        const c0 = [0, 0, 0, 0];
-        for (let c = 0; c < 4; c++) {
-          let s3 = pb4[c];
-          for (let b = 0; b < H; b++) s3 += P4[c * H + b] * a2[b];
-          c0[c] = s3;
-        }
-        const dpx = c0[0] * ux + c0[1] * tx, dpy = c0[0] * uy + c0[1] * ty;
-        const dvx = c0[2] * ux + c0[3] * tx, dvy = c0[2] * uy + c0[3] * ty;
-        delta[i * 4] += dpx;
-        delta[i * 4 + 1] += dpy;
-        delta[i * 4 + 2] += dvx;
-        delta[i * 4 + 3] += dvy;
-        if (i === traceIdx) {
-          const edge = trace.edges.find((x) => x.src === s);
-          edge.pair = { feats: Float64Array.from(f), coef: c0, dp: [dpx, dpy], dv: [dvx, dvy] };
-          trace.pairSum[0] += dpx; trace.pairSum[1] += dpy; trace.pairSum[2] += dvx; trace.pairSum[3] += dvy;
-        }
-      }
-    }
+    this.forPairs(p, count, cd, (i, j, d, rx, ry) => {
+      const pen = Math.max(cd - d, 0) / cd;
+      const fp = pen * this.pairMlp.eval(pen) * fs / d;
+      const fx = fp * rx, fy = fp * ry;
+      a[2 * i] += fx; a[2 * i + 1] += fy;
+      a[2 * j] -= fx; a[2 * j + 1] -= fy;
+      if (rec) { pair[2 * i] += fx; pair[2 * i + 1] += fy; pair[2 * j] -= fx; pair[2 * j + 1] -= fy; }
+    });
+  }
 
-    for (let i = 0; i < count; i++) {
-      const vx = vel[2 * i], vy = vel[2 * i + 1];
-      pos[2 * i] += vx * dt + delta[i * 4];
-      pos[2 * i + 1] += vy * dt + delta[i * 4 + 1];
-      vel[2 * i] = vx + delta[i * 4 + 2];
-      vel[2 * i + 1] = vy + delta[i * 4 + 3];
-      for (let a = 0; a < H; a++) hidden[i * H + a] = newHidden[i * H + a];
+  // One step; writes results into pos/vel in place (hidden passes through
+  // unchanged, the conservative model has no recurrent state). `traceIdx` >= 0
+  // returns the activation record for that ball.
+  step(pos, vel, hidden, count, traceIdx = -1) {
+    const { dt, contact_substeps: S } = this.cfg;
+    this.grow(count);
+    const { px, vx, a } = this;
+    const h = dt / S;
+    for (let i = 0; i < 2 * count; i++) { px[i] = pos[i]; vx[i] = vel[i]; }
+    const tracing = traceIdx >= 0 && traceIdx < count;
+    let trace = null, rec = null;
+    if (tracing) {
+      rec = { wall: this.aWall, pair: this.aPair };
+      trace = this.startTrace(pos, vel, hidden, count, traceIdx);
     }
-    if (trace) {
-      trace.dp = [delta[traceIdx * 4], delta[traceIdx * 4 + 1]];
-      trace.dv = [delta[traceIdx * 4 + 2], delta[traceIdx * 4 + 3]];
-      trace.delta = Float64Array.from(delta.subarray(traceIdx * 4, traceIdx * 4 + 4));
+    this.accel(px, count, a, rec);
+    if (tracing) this.recordSub(trace, 0, px, vx, a, traceIdx);
+    for (let s = 0; s < S; s++) {
+      for (let i = 0; i < 2 * count; i++) {
+        vx[i] += 0.5 * h * a[i];
+        px[i] += h * vx[i];
+      }
+      this.accel(px, count, a, rec);
+      for (let i = 0; i < 2 * count; i++) vx[i] += 0.5 * h * a[i];
+      if (tracing) this.recordSub(trace, s + 1, px, vx, a, traceIdx);
     }
+    if (tracing) {
+      const i = traceIdx;
+      trace.newPos = [px[2 * i], px[2 * i + 1]];
+      trace.newVel = [vx[2 * i], vx[2 * i + 1]];
+      trace.dp = [px[2 * i] - (pos[2 * i] + vel[2 * i] * dt), px[2 * i + 1] - (pos[2 * i + 1] + vel[2 * i + 1] * dt)];
+      trace.dv = [vx[2 * i] - vel[2 * i], vx[2 * i + 1] - vel[2 * i + 1]];
+    }
+    for (let i = 0; i < 2 * count; i++) { pos[i] = px[i]; vel[i] = vx[i]; }
     return trace;
+  }
+
+  recordSub(trace, s, p, v, a, i) {
+    trace.subPos[2 * s] = p[2 * i]; trace.subPos[2 * s + 1] = p[2 * i + 1];
+    trace.subVel[2 * s] = v[2 * i]; trace.subVel[2 * s + 1] = v[2 * i + 1];
+    trace.subAcc[2 * s] = a[2 * i]; trace.subAcc[2 * s + 1] = a[2 * i + 1];
+    trace.subAccWall[2 * s] = this.aWall[2 * i]; trace.subAccWall[2 * s + 1] = this.aWall[2 * i + 1];
+    trace.subAccPair[2 * s] = this.aPair[2 * i]; trace.subAccPair[2 * s + 1] = this.aPair[2 * i + 1];
+  }
+
+  // Start-of-step record for ball i (see web/README.md, "Trace"). Pair and
+  // wall activations are evaluated at the pre-step state, i.e. the first force
+  // evaluation of the substep loop.
+  startTrace(pos, vel, hidden, count, i) {
+    const { n, radius, force_scale: fs, neighbor_radius: R, contact_substeps: S } = this.cfg;
+    const x = pos[2 * i], y = pos[2 * i + 1];
+    const dist = [x, n - 1 - x, y, n - 1 - y];
+    const wall = dist.map((d) => {
+      const pen = Math.max(radius - d, 0) / radius;
+      const out = this.wallMlp.eval(pen);
+      return { pen, out, force: pen * out * fs, h1: Float64Array.from(this.wallMlp.h1), h2: Float64Array.from(this.wallMlp.h2) };
+    });
+    const cd = 2 * radius;
+    const edges = [];
+    for (let j = 0; j < count; j++) {
+      if (j === i) continue;
+      const rx = x - pos[2 * j], ry = y - pos[2 * j + 1];
+      const d = Math.sqrt(rx * rx + ry * ry + 1e-12);
+      if (d > R) continue;
+      const pen = Math.max(cd - d, 0) / cd;
+      const e = { src: j, dist: d, pen, unit: [rx / d, ry / d], contact: d <= cd, out: 0, mag: 0, force: [0, 0], h1: null, h2: null };
+      if (e.contact) {
+        e.out = this.pairMlp.eval(pen);
+        e.mag = pen * e.out * fs;
+        e.force = [e.mag * rx / d, e.mag * ry / d];
+        e.h1 = Float64Array.from(this.pairMlp.h1);
+        e.h2 = Float64Array.from(this.pairMlp.h2);
+      }
+      edges.push(e);
+    }
+    const sub = S + 1;
+    return {
+      index: i, pos: [x, y], vel: [vel[2 * i], vel[2 * i + 1]],
+      hidden: Float32Array.from(hidden.subarray(i * H, (i + 1) * H)),
+      wallDist: dist, wall, wallForce: [wall[0].force - wall[1].force, wall[2].force - wall[3].force],
+      gravity: [this.gx, this.gy], edges,
+      subPos: new Float64Array(2 * sub), subVel: new Float64Array(2 * sub), subAcc: new Float64Array(2 * sub),
+      subAccWall: new Float64Array(2 * sub), subAccPair: new Float64Array(2 * sub),
+      newPos: null, newVel: null, dp: null, dv: null,
+    };
+  }
+
+  // flat [i, j, i, j, ...] of pairs within `radius`, for drawing
+  edgeList(pos, count, radius) {
+    const out = [];
+    this.forPairs(pos, count, radius, (i, j) => { out.push(i, j); });
+    return out;
   }
 }
 

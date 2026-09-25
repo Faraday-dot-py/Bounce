@@ -1,161 +1,100 @@
 {
- "checkpoint": "token_model_soup_b.pt",
+ "checkpoint": "cons_pure.pt",
  "config": {
-  "hidden": 32,
   "neighbor_radius": 4.0,
-  "wall_range": 3.0,
   "radius": 0.75,
   "dt": 0.15,
-  "wall_lookahead": true,
-  "wall_head": true,
-  "pair_impulse": true,
+  "force_scale": 100.0,
   "gravity": 9.0,
   "n": 100,
-  "max_speed": 30.0
+  "max_speed": 30.0,
+  "contact_substeps": 8,
+  "conservative_contact": true
  },
  "tensors": {
-  "query.weight": {
+  "gravity": {
    "shape": [
-    32,
-    46
+    2
    ],
    "offset": 0
   },
-  "query.bias": {
+  "pair_force.0.weight": {
    "shape": [
-    32
+    64,
+    1
    ],
-   "offset": 1472
+   "offset": 2
   },
-  "key.weight": {
+  "pair_force.0.bias": {
    "shape": [
-    32,
-    48
+    64
    ],
-   "offset": 1504
+   "offset": 66
   },
-  "key.bias": {
+  "pair_force.2.weight": {
    "shape": [
-    32
+    64,
+    64
    ],
-   "offset": 3040
+   "offset": 130
   },
-  "value.weight": {
+  "pair_force.2.bias": {
    "shape": [
-    32,
-    48
+    64
    ],
-   "offset": 3072
+   "offset": 4226
   },
-  "value.bias": {
+  "pair_force.4.weight": {
    "shape": [
-    32
+    1,
+    64
    ],
-   "offset": 4608
+   "offset": 4290
   },
-  "gru.weight_ih": {
+  "pair_force.4.bias": {
    "shape": [
-    96,
-    32
+    1
    ],
-   "offset": 4640
+   "offset": 4354
   },
-  "gru.weight_hh": {
+  "wall_force.0.weight": {
    "shape": [
-    96,
-    32
+    64,
+    1
    ],
-   "offset": 7712
+   "offset": 4355
   },
-  "gru.bias_ih": {
+  "wall_force.0.bias": {
    "shape": [
-    96
+    64
    ],
-   "offset": 10784
+   "offset": 4419
   },
-  "gru.bias_hh": {
+  "wall_force.2.weight": {
    "shape": [
-    96
+    64,
+    64
    ],
-   "offset": 10880
+   "offset": 4483
   },
-  "delta_head.weight": {
+  "wall_force.2.bias": {
    "shape": [
-    4,
-    32
+    64
    ],
-   "offset": 10976
+   "offset": 8579
   },
-  "delta_head.bias": {
+  "wall_force.4.weight": {
    "shape": [
-    4
+    1,
+    64
    ],
-   "offset": 11104
+   "offset": 8643
   },
-  "wall_head.0.weight": {
+  "wall_force.4.bias": {
    "shape": [
-    32,
-    14
+    1
    ],
-   "offset": 11108
-  },
-  "wall_head.0.bias": {
-   "shape": [
-    32
-   ],
-   "offset": 11556
-  },
-  "wall_head.2.weight": {
-   "shape": [
-    4,
-    32
-   ],
-   "offset": 11588
-  },
-  "wall_head.2.bias": {
-   "shape": [
-    4
-   ],
-   "offset": 11716
-  },
-  "pair_head.0.weight": {
-   "shape": [
-    32,
-    5
-   ],
-   "offset": 11720
-  },
-  "pair_head.0.bias": {
-   "shape": [
-    32
-   ],
-   "offset": 11880
-  },
-  "pair_head.2.weight": {
-   "shape": [
-    32,
-    32
-   ],
-   "offset": 11912
-  },
-  "pair_head.2.bias": {
-   "shape": [
-    32
-   ],
-   "offset": 12936
-  },
-  "pair_head.4.weight": {
-   "shape": [
-    4,
-    32
-   ],
-   "offset": 12968
-  },
-  "pair_head.4.bias": {
-   "shape": [
-    4
-   ],
-   "offset": 13096
+   "offset": 8707
   }
  }
 }
