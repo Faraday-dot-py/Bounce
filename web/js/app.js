@@ -1,9 +1,9 @@
-import { loadWeights } from "./model.js";
-import { Sim } from "./sim.js";
-import { Physics } from "./physics.js";
-import { Scene } from "./scene.js";
-import { fmt } from "./arch.js";
-import { forceLut, drawPair, drawWall, drawEnergy } from "./plots.js";
+import { loadWeights } from "./model.js?v=a32c277a1d";
+import { Sim } from "./sim.js?v=a32c277a1d";
+import { Physics } from "./physics.js?v=a32c277a1d";
+import { Scene } from "./scene.js?v=a32c277a1d";
+import { fmt } from "./arch.js?v=a32c277a1d";
+import { forceLut, drawPair, drawWall, drawEnergy } from "./plots.js?v=a32c277a1d";
 
 const $ = (id) => document.getElementById(id);
 const H = 32, SWEEP = 900, HIST = 300;
@@ -298,7 +298,7 @@ canvas.addEventListener("pointerup", (e) => {
     st.selected = sim.ids[hit.index];
     refreshTrace();
     st.sweep = performance.now();
-  } else if (hit && hit.kind === "cell" && hit.cell.par) selectWeight(...hit.cell.par);
+  } else if (hit && hit.kind === "cell" && hit.cell.par) { if (!st.panel) setPanel(true); selectWeight(...hit.cell.par); }
   else if (hit && hit.kind === "arena") burst(hit.x, hit.y, 8, 1.2);
   if (e.pointerType !== "mouse") { hoverAt = { x: e.clientX, y: e.clientY }; }
 });
@@ -455,7 +455,7 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
-window.__bounce = { net, selectWeight, editWeight, sim, view, st, gt, setGT, setPaused, setGravity, camera, benchTicks(count, ticks = 300) {
+window.__bounce = { net, ws, selectWeight, editWeight, sim, view, st, gt, setGT, setPaused, setGravity, camera, benchTicks(count, ticks = 300) {
   sim.clear();
   sim.populate(count);
   const t0 = performance.now();

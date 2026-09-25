@@ -5,11 +5,12 @@
 
 const H = 32;
 const W = 64;
+const VQ = "?v=a32c277a1d";
 
 export async function loadWeights(base = "weights") {
   const [manifest, buf] = await Promise.all([
-    fetch(base + ".json").then((r) => r.json()),
-    fetch(base + ".bin").then((r) => r.arrayBuffer()),
+    fetch(base + ".json" + VQ).then((r) => r.json()),
+    fetch(base + ".bin" + VQ).then((r) => r.arrayBuffer()),
   ]);
   return parseWeights(manifest, buf);
 }

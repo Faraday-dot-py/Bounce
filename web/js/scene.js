@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { Arch, divColor, sl } from "./arch.js";
+import { Arch, divColor, sl } from "./arch.js?v=a32c277a1d";
 
 THREE.ColorManagement.enabled = false;
 

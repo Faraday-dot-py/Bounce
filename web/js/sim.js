@@ -1,4 +1,4 @@
-import { TokenNet, containState } from "./model.js";
+import { TokenNet, containState } from "./model.js?v=a32c277a1d";
 
 const H = 32;
 
