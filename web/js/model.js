@@ -230,9 +230,13 @@ export class TokenNet {
 
 // Guard from scripts/realtime_sim.py: clamp to the box, zero outward
 // velocity, cap speed, drop non-finite tokens. Returns the new count.
-export function containState(pos, vel, hidden, count, n, maxSpeed, ids = null) {
+// `margin` widens the clamp box and `zeroOutward` = false keeps the outward
+// velocity, so the learned soft wall (which starts at 0.75 inside and can be
+// pushed past the wall by fast balls) does its own stopping.
+export function containState(pos, vel, hidden, count, n, maxSpeed, ids = null, margin = 0, zeroOutward = true) {
   let m = 0;
   const top = n - 1;
+  const lo = -margin, hi = top + margin;
   for (let i = 0; i < count; i++) {
     const p0 = pos[2 * i], p1 = pos[2 * i + 1], v0 = vel[2 * i], v1 = vel[2 * i + 1];
     if (!(Number.isFinite(p0) && Number.isFinite(p1) && Number.isFinite(v0) && Number.isFinite(v1))) continue;
@@ -246,8 +250,8 @@ export function containState(pos, vel, hidden, count, n, maxSpeed, ids = null) {
   for (let i = 0; i < m; i++) {
     for (let c = 0; c < 2; c++) {
       const p = pos[2 * i + c], v = vel[2 * i + c];
-      if ((p < 0 && v < 0) || (p > top && v > 0)) vel[2 * i + c] = 0;
-      pos[2 * i + c] = Math.min(Math.max(p, 0), top);
+      if (zeroOutward && ((p < lo && v < 0) || (p > hi && v > 0))) vel[2 * i + c] = 0;
+      pos[2 * i + c] = Math.min(Math.max(p, lo), hi);
     }
     const sp = Math.max(Math.hypot(vel[2 * i], vel[2 * i + 1]), 1e-6);
     const k = Math.min(sp, maxSpeed) / sp;

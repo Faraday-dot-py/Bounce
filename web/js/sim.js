@@ -19,7 +19,7 @@ export class Sim {
   constructor(weights, { maxBalls = 300, spawnSpeed = 2.3, seed = 4738 } = {}) {
     this.net = new TokenNet(weights);
     this.n = weights.config.n;
-    this.maxSpeed = weights.config.max_speed;
+    this.maxSpeed = 120;
     this.maxBalls = maxBalls;
     this.spawnSpeed = spawnSpeed;
     this.minGap = 1.5;
@@ -86,7 +86,7 @@ export class Sim {
     this.ticks++;
     if (this.count === 0) return null;
     const trace = this.net.step(this.pos, this.vel, this.hidden, this.count, traceId >= 0 ? this.indexOf(traceId) : -1);
-    this.count = containState(this.pos, this.vel, this.hidden, this.count, this.n, this.maxSpeed, this.ids);
+    this.count = containState(this.pos, this.vel, this.hidden, this.count, this.n, this.maxSpeed, this.ids, 1, false);
     return trace;
   }
 }
