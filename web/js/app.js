@@ -13,7 +13,7 @@ const sim = new Sim(weights);
 const cfg = weights.config;
 const net = sim.net;
 let lut = forceLut(net);
-const gt = new Physics(cfg.n, { dt: cfg.dt, gravity: cfg.gravity, radius: cfg.radius });
+const gt = new Physics(cfg.n, { dt: cfg.dt, gravity: cfg.gravity, radius: cfg.radius, substeps: 64 });
 const view = new Scene($("stage"), cfg);
 
 const st = {
@@ -118,7 +118,7 @@ function tick() {
   const t0 = performance.now();
   const tr = sim.tick(st.selected);
   st.stepMs = st.stepMs * 0.9 + (performance.now() - t0) * 0.1;
-  if (st.gtOn) { gt.step(); syncGT(); }
+  if (st.gtOn) { gt.substeps = sim.count > 150 ? 32 : 64; gt.step(); syncGT(); }
   setTrace(tr);
   st.eModel.push(energyModel()[1]);
   if (st.gtOn) st.eTruth.push(energyTruth());
