@@ -12,8 +12,7 @@ const weights = await loadWeights("weights");
 const sim = new Sim(weights);
 const cfg = weights.config;
 const net = sim.net;
-const g0 = [net.gx, net.gy];
-const lut = forceLut(net);
+let lut = forceLut(net);
 const gt = new Physics(cfg.n, { dt: cfg.dt, gravity: cfg.gravity, radius: cfg.radius });
 const view = new Scene($("stage"), cfg);
 
@@ -169,19 +168,79 @@ function setGT(on) {
 function setGravity(on) {
   st.gravity = on;
   press("b-grav", on);
-  net.gx = on ? g0[0] : 0;
-  net.gy = on ? g0[1] : 0;
+  net.gOn = on;
   gt.gravity = on ? cfg.gravity : 0;
-  view.gravArrow.visible = on;
+  view.setGravity(net.gx, net.gy);
   st.eModel.length = st.eTruth.length = 0;
   refreshTrace();
 }
-function setPanel(on) {
+const ws = { name: "gravity", i: 0 };
+const wname = $("w-name"), widx = $("w-idx"), wval = $("w-val"), wslide = $("w-slide");
+const wshape = (name) => name === "gravity" ? 2 : net.w[name].length;
+for (const k of Object.keys(net.w)) wname.add(new Option(`${k} [${wshape(k)}]`, k));
+
+function wrange() {
+  if (ws.name === "gravity") return [-30, 30, 0.05];
+  let m = 1;
+  for (const v of net.trained[ws.name]) m = Math.max(m, 3 * Math.abs(v));
+  return [-m, m, m / 500];
+}
+
+function syncWeight() {
+  const n = net.edited();
+  const v = net.get(ws.name, ws.i), t = ws.name === "gravity" ? net.trained.gravity[ws.i] * 10 : net.trained[ws.name][ws.i];
+  const [lo, hi, step] = wrange();
+  wname.value = ws.name;
+  widx.max = wshape(ws.name) - 1;
+  if (document.activeElement !== widx) widx.value = ws.i;
+  if (document.activeElement !== wval) wval.value = +v.toPrecision(6);
+  wslide.min = Math.min(lo, v); wslide.max = Math.max(hi, v); wslide.step = step; wslide.value = v;
+  $("w-info").textContent = `trained ${+t.toPrecision(5)}${Math.abs(v - t) > 1e-9 ? " · edited" : ""}`;
+  $("w-all").disabled = !n;
+  $("w-note").textContent = n ? `${n} edited · truth ghost unedited` : "";
+}
+
+function selectWeight(name, i) {
+  ws.name = name;
+  ws.i = Math.max(0, Math.min(wshape(name) - 1, i | 0));
+  syncWeight();
+}
+
+function editWeight(v) {
+  net.set(ws.name, ws.i, v);
+  lut = forceLut(net);
+  st.eModel.length = st.eTruth.length = 0;
+  view.setGravity(net.gx, net.gy);
+  syncWeight();
+  st.dirty = true;
+  refreshTrace();
+}
+
+function resetWeights(all) {
+  if (all) net.reset(); else net.reset(ws.name, ws.name === "gravity" ? -1 : ws.i);
+  lut = forceLut(net);
+  st.eModel.length = st.eTruth.length = 0;
+  view.setGravity(net.gx, net.gy);
+  syncWeight();
+  st.dirty = true;
+  refreshTrace();
+}
+
+wname.onchange = () => selectWeight(wname.value, 0);
+widx.oninput = () => selectWeight(ws.name, +widx.value);
+wval.oninput = () => { if (wval.value !== "") editWeight(+wval.value); };
+wslide.oninput = () => editWeight(+wslide.value);
+$("w-reset").onclick = () => resetWeights(false);
+$("w-all").onclick = () => resetWeights(true);
+
+function setPanel(on, save = true) {
   st.panel = on;
   press("b-panel", on);
-  $("panel").hidden = !on;
+  $("panel").classList.toggle("off", !on);
+  $("tab").hidden = on;
+  if (save) try { localStorage.setItem("bounce.panel", on ? "1" : "0"); } catch {}
   st.dirty = true;
-  if (view.W) insets();
+  if (view.W) { insets(); camera(st.cam || "all"); }
 }
 function stepOnce() {
   setPaused(true);
@@ -206,11 +265,13 @@ $("b-grav").onclick = () => setGravity(!st.gravity);
 $("b-gt").onclick = () => setGT(!st.gtOn);
 $("b-edges").onclick = () => { st.edges = (st.edges + 1) % 3; press("b-edges", st.edges > 0); $("b-edges").firstChild.textContent = ["Edges", "Edges", "All edges"][st.edges]; };
 $("b-panel").onclick = () => setPanel(!st.panel);
+$("collapse").onclick = () => setPanel(false);
+$("tab").onclick = () => setPanel(true);
 $("b-pick").onclick = pickContact;
 for (const n of ["all", "arena", "arch", "follow"]) $("cam-" + n).onclick = () => camera(n);
 
 window.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || (e.target.tagName === "INPUT" && e.key !== " ")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || (e.target.tagName === "INPUT" && e.key !== " ") || e.target.tagName === "SELECT") return;
   const act = {
     " ": () => setPaused(!st.paused), ".": stepOnce, r: reset, b: () => $("b-burst").click(), v: () => setGravity(!st.gravity),
     g: () => setGT(!st.gtOn), p: pickContact, e: () => $("b-edges").click(), t: () => setPanel(!st.panel),
@@ -237,7 +298,8 @@ canvas.addEventListener("pointerup", (e) => {
     st.selected = sim.ids[hit.index];
     refreshTrace();
     st.sweep = performance.now();
-  } else if (hit && hit.kind === "arena") burst(hit.x, hit.y, 8, 1.2);
+  } else if (hit && hit.kind === "cell" && hit.cell.par) selectWeight(...hit.cell.par);
+  else if (hit && hit.kind === "arena") burst(hit.x, hit.y, 8, 1.2);
   if (e.pointerType !== "mouse") { hoverAt = { x: e.clientX, y: e.clientY }; }
 });
 canvas.addEventListener("pointermove", (e) => { hoverAt = { x: e.clientX, y: e.clientY }; if (e.buttons) tip.classList.remove("on"); });
@@ -318,7 +380,7 @@ function panel() {
   const v2 = (a) => `(${fmt(a[0])}, ${fmt(a[1])})`;
   $("sel-id").textContent = tr ? `#${st.selected}` : "";
   $("sel").innerHTML = tr
-    ? `pos <b>${v2(tr.pos)}</b><br>vel <b>${v2(tr.vel)}</b><br>neighbours <b>${tr.edges.length}</b> · contacts <b>${tr.edges.filter((e) => e.contact).length}</b> · walls <b>${tr.wall.filter((w) => w.pen > 0).length}</b><br>dp <b>${v2(tr.dp)}</b><br>dv <b>${v2(tr.dv)}</b>`
+    ? [["pos", v2(tr.pos)], ["vel", v2(tr.vel)], ["dp", v2(tr.dp)], ["dv", v2(tr.dv)], ["nbrs", tr.edges.length], ["contacts", tr.edges.filter((e) => e.contact).length], ["walls", tr.wall.filter((w) => w.pen > 0).length]].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("")
     : "no balls";
   drawPair($("c-pair"), lut, tr);
   drawWall($("c-wall"), lut, tr);
@@ -339,7 +401,7 @@ let wasSmall = null;
 function resize() {
   view.resize(innerWidth, innerHeight);
   const small = innerWidth <= 760;
-  if (small !== wasSmall) { if (wasSmall !== null) setPanel(!small); wasSmall = small; }
+  if (small !== wasSmall) { if (wasSmall !== null) setPanel(!small, false); wasSmall = small; }
   insets();
   camera(st.cam || "all");
   st.dirty = true;
@@ -347,10 +409,12 @@ function resize() {
 addEventListener("resize", resize);
 
 const small = matchMedia("(max-width: 760px)").matches;
-if (small) { setPanel(false); $("r-balls").value = 30; }
+if (small) { setPanel(false, false); $("r-balls").value = 30; }
+try { const p = localStorage.getItem("bounce.panel"); if (p !== null) setPanel(p === "1", false); } catch {}
 sim.populate(+$("r-balls").value);
 countChanged();
 refreshTrace();
+selectWeight("gravity", 0);
 resize();
 view.camera.position.copy(view.goal.pos).multiplyScalar(1.6);
 
@@ -391,7 +455,7 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
-window.__bounce = { sim, view, st, gt, setGT, setPaused, setGravity, camera, benchTicks(count, ticks = 300) {
+window.__bounce = { net, selectWeight, editWeight, sim, view, st, gt, setGT, setPaused, setGravity, camera, benchTicks(count, ticks = 300) {
   sim.clear();
   sim.populate(count);
   const t0 = performance.now();

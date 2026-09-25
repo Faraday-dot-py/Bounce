@@ -123,6 +123,12 @@ export class Scene {
     this.portrait = null;
   }
 
+  setGravity(gx, gy) {
+    const m = Math.hypot(gx, gy);
+    this.gravArrow.visible = m > 1e-6;
+    if (m > 1e-6) this.gravArrow.setDirection(this.v.set(gy / m, 0, gx / m));
+  }
+
   resize(w, h) {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;

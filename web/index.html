@@ -33,15 +33,29 @@ dl div { min-width: 0; }
 dt { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
 dd { margin: 0; font: 13px var(--mono); font-variant-numeric: tabular-nums; }
 aside { position: fixed; right: 16px; top: 16px; width: 300px; max-height: calc(100% - 104px); overflow: auto; padding: 12px 14px; scrollbar-width: thin; }
-aside[hidden] { display: none; }
+aside { transition: transform 0.22s ease, opacity 0.22s ease, visibility 0s linear 0s; }
+aside.off { transform: translateX(calc(100% + 24px)); opacity: 0; visibility: hidden; pointer-events: none; transition: transform 0.22s ease, opacity 0.22s ease, visibility 0s linear 0.22s; }
+#tab { position: fixed; right: 0; top: 16px; width: 26px; height: 56px; padding: 0; border-radius: 10px 0 0 10px; border-right: 0; font-size: 16px; display: grid; place-items: center; }
+#tab[hidden] { display: none; }
+#collapse { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; padding: 0; font-size: 16px; }
 aside h2 { font-size: 11px; margin: 12px 0 4px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; display: flex; justify-content: space-between; gap: 8px; }
 aside h2:first-child { margin-top: 0; }
 aside h2 small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); font-family: var(--mono); }
 aside canvas { width: 100%; height: 108px; display: block; }
-#sel { font: 12px/1.55 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+#sel { font: 12px/1.4 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; display: flex; flex-wrap: wrap; gap: 3px 12px; }
 #sel b { color: var(--fg); font-weight: 500; }
+#sel span { white-space: nowrap; }
 .key { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--dim); margin-top: 6px; }
 .key i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+#wt { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+#wt select, #wt input[type=number] { width: 100%; background: #0d131d; color: var(--fg); border: 1px solid var(--line2); border-radius: 6px; height: 28px; font: 12px var(--mono); padding: 0 6px; }
+#wt select, #wt input[type=range], #wt .row, #wt .hint { grid-column: 1 / -1; }
+#wt label { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
+#wt input[type=range] { width: 100%; }
+#wt .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+#wt .row button { height: 26px; margin-left: 4px; }
+#wt small { color: var(--faint); font: 11px var(--mono); }
+#wt .hint { font: 11px system-ui, sans-serif; }
 .ramp { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #cfe3ff, var(--neg) 25%, #161b25 50%, var(--pos) 75%, #ffe7c8); margin: 6px 0 2px; }
 .ramp + div { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); }
 nav { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); width: max-content; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: center; padding: 8px; max-width: calc(100% - 32px); }
@@ -70,6 +84,7 @@ input[type=range] { width: 88px; accent-color: var(--accent); }
   dd { font-size: 12px; }
   aside { left: 16px; right: 16px; top: auto; bottom: 76px; width: auto; max-height: 38%; }
   aside canvas { height: 84px; }
+  #tab { top: auto; bottom: 84px; }
   nav { left: 16px; right: 16px; bottom: 12px; transform: none; width: auto; max-width: none; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; gap: 4px; padding: 6px; scrollbar-width: none; }
   nav::-webkit-scrollbar { display: none; }
   nav > * { flex: none; }
@@ -97,6 +112,7 @@ input[type=range] { width: 88px; accent-color: var(--accent); }
   </dl>
 </header>
 <aside id="panel" class="glass" aria-label="trace panel">
+  <button id="collapse" aria-label="hide trace panel" title="hide panel">»</button>
   <h2>Selected token <small id="sel-id"></small></h2>
   <div id="sel">click a ball</div>
   <h2>Pair force f(d) <small>learned MLP</small></h2>
@@ -106,6 +122,15 @@ input[type=range] { width: 88px; accent-color: var(--accent); }
   <h2>Energy <small id="e-read"></small></h2>
   <canvas id="c-energy" aria-label="total energy over time for the model and ground truth"></canvas>
   <div class="key"><span><i style="background:var(--accent)"></i>model</span><span><i style="background:var(--pos)"></i>ground truth</span><span><i style="background:var(--pos);width:7px;height:7px;border-radius:50%"></i>operating point</span></div>
+  <h2>Weights <small id="w-note"></small></h2>
+  <div id="wt">
+    <select id="w-name" aria-label="weight tensor"></select>
+    <label>index <input type="number" id="w-idx" min="0" step="1" value="0" aria-label="weight index"></label>
+    <input type="range" id="w-slide" step="any" aria-label="weight slider">
+    <label>value <input type="number" id="w-val" step="any" aria-label="weight value"></label>
+    <div class="row"><small id="w-info"></small><span><button id="w-reset">Reset</button><button id="w-all">Reset all</button></span></div>
+    <small class="hint">Click a cube in the model view to pick its weight. Gravity is in accel units (learned 8.9, 0.07).</small>
+  </div>
   <h2>Colour</h2>
   <div class="ramp"></div><div><span>negative</span><span>0</span><span>positive</span></div>
   <div class="key"><span><i style="background:var(--pos)"></i>pair accel</span><span><i style="background:var(--wall)"></i>wall accel</span><span><i style="background:var(--grav)"></i>gravity</span><span><i style="background:#fff"></i>total</span></div>
@@ -136,6 +161,7 @@ input[type=range] { width: 88px; accent-color: var(--accent); }
     <button id="cam-follow" aria-keyshortcuts="4">Follow<kbd>4</kbd></button>
   </div>
 </nav>
+<button id="tab" class="glass" hidden aria-label="show trace panel" title="show panel">«</button>
 <div id="tip" class="glass" role="tooltip"></div>
 <script type="module" src="js/app.js"></script>
 </body>

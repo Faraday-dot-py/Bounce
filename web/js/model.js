@@ -28,7 +28,7 @@ class RadialMlp {
   constructor(w, prefix) {
     this.W0 = w[prefix + ".0.weight"]; this.b0 = w[prefix + ".0.bias"];
     this.W1 = w[prefix + ".2.weight"]; this.b1 = w[prefix + ".2.bias"];
-    this.W2 = w[prefix + ".4.weight"]; this.b2 = w[prefix + ".4.bias"][0];
+    this.W2 = w[prefix + ".4.weight"]; this.B2 = w[prefix + ".4.bias"];
     this.h1 = new Float64Array(W);
     this.h2 = new Float64Array(W);
   }
@@ -37,7 +37,7 @@ class RadialMlp {
   eval(x) {
     const { W0, b0, W1, b1, W2, h1, h2 } = this;
     for (let a = 0; a < W; a++) h1[a] = Math.tanh(W0[a] * x + b0[a]);
-    let out = this.b2;
+    let out = this.B2[0];
     for (let a = 0; a < W; a++) {
       let s = b1[a];
       const o = a * W;
@@ -54,10 +54,38 @@ export class TokenNet {
     this.cfg = config;
     this.pairMlp = new RadialMlp(w, "pair_force");
     this.wallMlp = new RadialMlp(w, "wall_force");
-    this.gx = w.gravity[0] * 10;
-    this.gy = w.gravity[1] * 10;
+    this.w = w;
+    this.trained = {};
+    for (const k of Object.keys(w)) this.trained[k] = Float32Array.from(w[k]);
+    this.gOn = true;
+    this.version = 0;
     this.cap = 0;
     this.grow(64);
+  }
+
+  get gx() { return this.gOn ? this.w.gravity[0] * 10 : 0; }
+  get gy() { return this.gOn ? this.w.gravity[1] * 10 : 0; }
+
+  get(name, i) { return name === "gravity" ? this.w.gravity[i] * 10 : this.w[name][i]; }
+
+  set(name, i, v) {
+    if (!Number.isFinite(v)) return;
+    this.w[name][i] = name === "gravity" ? v / 10 : v;
+    this.version++;
+  }
+
+  reset(name = null, i = -1) {
+    for (const k of name ? [name] : Object.keys(this.w)) {
+      if (i >= 0) this.w[k][i] = this.trained[k][i];
+      else this.w[k].set(this.trained[k]);
+    }
+    this.version++;
+  }
+
+  edited() {
+    let n = 0;
+    for (const k of Object.keys(this.w)) for (let i = 0; i < this.w[k].length; i++) if (this.w[k][i] !== this.trained[k][i]) n++;
+    return n;
   }
 
   grow(n) {
@@ -109,6 +137,7 @@ export class TokenNet {
   accel(p, count, a, rec = null) {
     const { n, radius, force_scale: fs } = this.cfg;
     const wall = rec ? rec.wall : null, pair = rec ? rec.pair : null;
+    const gx = this.gx, gy = this.gy;
     for (let i = 0; i < count; i++) {
       const x = p[2 * i], y = p[2 * i + 1];
       const d = [x, n - 1 - x, y, n - 1 - y];
@@ -118,8 +147,8 @@ export class TokenNet {
         if (pen > 0) f[c] = pen * this.wallMlp.eval(pen) * fs;
       }
       const wx = f[0] - f[1], wy = f[2] - f[3];
-      a[2 * i] = wx + this.gx;
-      a[2 * i + 1] = wy + this.gy;
+      a[2 * i] = wx + gx;
+      a[2 * i + 1] = wy + gy;
       if (rec) { wall[2 * i] = wx; wall[2 * i + 1] = wy; pair[2 * i] = 0; pair[2 * i + 1] = 0; }
     }
     const cd = 2 * radius;

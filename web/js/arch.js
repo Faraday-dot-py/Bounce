@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 export const MAXE = 6;
-const CAP = 1800, MAXW = 400;
+const CAP = 1800, MAXW = 400, VMAX = 1.2;
 const WALLS = ["x = 0", "x = 99", "y = 0", "y = 99"];
 
 export function divColor(t, c, k = 1) {
@@ -72,7 +72,7 @@ export class Arch {
       if (nw >= MAXW) return;
       this.wirePos.set([u0, 0.05, w0, u1, 0.05, w1], 6 * nw++);
     };
-    const cell = (u, w, s, v, name, val, dim = false) => C.push({ u, w, s, v, name, val, dim, h: s * (0.3 + 1.4 * Math.abs(v)) });
+    const cell = (u, w, s, v, name, val, dim = false, par = null) => C.push({ u, w, s, v, name, val, dim, par, h: s * 1.4 * Math.max(-VMAX, Math.min(VMAX, v || 0)) });
     const lab = (text, u, w, cls = "", left = false) => L.push({ text, u, w, cls, left });
     const vec = (u, w, s, gap, a, sc, name, unit = 1) => {
       cell(u, w, s, sc(a[0] / unit), name + " x", fmt(a[0]));
@@ -100,11 +100,11 @@ export class Arch {
       for (let r = 0; r < 8; r++) {
         for (let q = 0; q < 8; q++) {
           const a = r * 8 + q;
-          cell(u0 + q, 11 + r, 0.8, off ? 0 : e.h1[a], `${tag} · h1[${a}] = tanh(W0 pen + b0)`, off ? "inactive (no contact)" : fmt(e.h1[a]), off);
-          cell(u0 + q, 20 + r, 0.8, off ? 0 : e.h2[a], `${tag} · h2[${a}] = tanh(W1 h1 + b1)`, off ? "inactive (no contact)" : fmt(e.h2[a]), off);
+          cell(u0 + q, 11 + r, 0.8, off ? 0 : e.h1[a], `${tag} · h1[${a}] = tanh(W0 pen + b0)`, off ? "inactive (no contact)" : fmt(e.h1[a]), off, ["pair_force.0.weight", a]);
+          cell(u0 + q, 20 + r, 0.8, off ? 0 : e.h2[a], `${tag} · h2[${a}] = tanh(W1 h1 + b1)`, off ? "inactive (no contact)" : fmt(e.h2[a]), off, ["pair_force.2.bias", a]);
         }
       }
-      cell(u0 + 1.5, 29.5, 1.2, sl(e.out, 0.05), `${tag} · MLP out`, fmt(e.out), off);
+      cell(u0 + 1.5, 29.5, 1.2, sl(e.out, 0.05), `${tag} · MLP out`, fmt(e.out), off, ["pair_force.4.bias", 0]);
       cell(u0 + 3.5, 29.5, 1.2, sl(e.mag), `${tag} · |F| = pen · out · 100`, fmt(e.mag), off);
       cell(u0 + 5.5, 29.5, 1.2, sl(e.force[0]), `${tag} · force x`, fmt(e.force[0]), off);
       cell(u0 + 7.5, 29.5, 1.2, sl(e.force[1]), `${tag} · force y`, fmt(e.force[1]), off);
@@ -129,11 +129,11 @@ export class Arch {
       for (let r = 0; r < 8; r++) {
         for (let q = 0; q < 8; q++) {
           const a = r * 8 + q;
-          cell(u0 + q, 42 + r, 0.8, wl.h1[a], `${tag} · h1[${a}]`, fmt(wl.h1[a]), off);
-          cell(u0 + q, 51 + r, 0.8, wl.h2[a], `${tag} · h2[${a}]`, fmt(wl.h2[a]), off);
+          cell(u0 + q, 42 + r, 0.8, wl.h1[a], `${tag} · h1[${a}]`, fmt(wl.h1[a]), off, ["wall_force.0.weight", a]);
+          cell(u0 + q, 51 + r, 0.8, wl.h2[a], `${tag} · h2[${a}]`, fmt(wl.h2[a]), off, ["wall_force.2.bias", a]);
         }
       }
-      cell(u0 + 2.5, 60.3, 1.2, sl(wl.out, 0.05), `${tag} · MLP out`, fmt(wl.out), off);
+      cell(u0 + 2.5, 60.3, 1.2, sl(wl.out, 0.05), `${tag} · MLP out`, fmt(wl.out), off, ["wall_force.4.bias", 0]);
       cell(u0 + 4.5, 60.3, 1.2, sl(wl.force), `${tag} · force = pen · out · 100`, fmt(wl.force), off);
       wire(u0 + 3.5, 40.5, u0 + 3.5, 42);
       wire(u0 + 3.5, 49.8, u0 + 3.5, 51);
@@ -142,6 +142,8 @@ export class Arch {
     });
     lab("learned gravity", 60, 37.3, "col");
     vec(57, 42, 2.2, 3, tr.gravity, (x) => sl(x), "learned gravity");
+    C[C.length - 2].par = ["gravity", 0];
+    C[C.length - 1].par = ["gravity", 1];
     wire(59.5, 44.5, 19, 64.2);
 
     lab("acceleration = wall + pair + gravity", -1, 62.3, "sec", true);
@@ -182,8 +184,9 @@ export class Arch {
       const e = C[i];
       const b = front < 0 ? 0 : Math.exp(-(((e.w - front) / 3) ** 2));
       const k = 1 + 1.2 * b + (i === this.hover ? 1.5 : 0);
-      m.makeScale(e.s, e.h * (1 + 0.8 * b) + 0.02, e.s);
-      m.setPosition(e.u, 0, e.w);
+      const z0 = e.s * 1.4 * VMAX, z = Math.max(e.h * (1 + 0.8 * b), -z0);
+      m.makeScale(e.s, Math.abs(z) + 0.08 * e.s, e.s);
+      m.setPosition(e.u, z0 + 0.01 * e.s + Math.min(z, 0), e.w);
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, e.dim ? c.setRGB(0.1 * k, 0.13 * k, 0.19 * k) : divColor(e.v, c, k));
     }

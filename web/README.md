@@ -41,3 +41,9 @@ Config (radius 0.75, dt 0.15, force_scale 100, neighbour radius 4.0, arena 100) 
 - `newPos`, `newVel`, `dp`, `dv` (dp relative to pos + vel * dt, as in PyTorch).
 
 `net.edgeList(pos, count, radius)` returns a flat [i, j, ...] pair list.
+
+## Editing weights
+
+The Weights section of the side panel edits any tensor entry live (`net.set(name, i, v)`; gravity is in accel units, x10 of the stored value). Pick a tensor and index, type a value or drag the slider; clicking a cube in the model view selects its weight (gravity cells, h1 -> `*.0.weight`, h2 -> `*.2.bias`, MLP out -> `*.4.bias`). Reset restores the trained value, Reset all restores every weight. The force curves and trace update immediately; the truth ghost always uses unedited physics with gravity along +x. Gravity is a free 2-vector (negative and y components work).
+
+Activation cube heights are signed: positive rises above the cell baseline, negative hangs below it (clamped at +-1.2 x scale).
